@@ -1,4 +1,4 @@
-# Code Detective - AST-Based PR Reviewer
+# Code Sherlock - AST-Based PR Reviewer
 
 A powerful PR review tool that uses [chunkyyy](https://github.com/your-org/chunkyyy) for semantic code chunking and AI models (OpenAI/Claude) for intelligent code review.
 
@@ -14,7 +14,7 @@ A powerful PR review tool that uses [chunkyyy](https://github.com/your-org/chunk
 ## Installation
 
 ```bash
-npm install code-detective
+npm install code-sherlock
 ```
 
 ## Quick Start
@@ -22,10 +22,10 @@ npm install code-detective
 ### 1. Initialize Configuration
 
 ```bash
-code-detective init
+code-sherlock init
 ```
 
-This creates a `code-detective.config.json` file. Update it with your settings:
+This creates a `code-sherlock.config.json` file. Update it with your settings:
 
 ```json
 {
@@ -56,19 +56,19 @@ This creates a `code-detective.config.json` file. Update it with your settings:
 ### 2. Review a PR
 
 ```bash
-code-detective review -b feature-branch --base main
+code-sherlock review -b feature-branch --base main
 ```
 
 ### 3. Review a Specific File
 
 ```bash
-code-detective review-file -f src/utils.ts -b feature-branch
+code-sherlock review-file -f src/utils.ts -b feature-branch
 ```
 
 ### 4. Review a Code Range
 
 ```bash
-code-detective review-file -f src/utils.ts -b feature-branch --start-line 10 --end-line 50
+code-sherlock review-file -f src/utils.ts -b feature-branch --start-line 10 --end-line 50
 ```
 
 ## Configuration
@@ -106,7 +106,7 @@ Define custom review rules in natural language. Examples:
 Review a PR by branch name:
 
 ```bash
-code-detective review -b feature-branch [options]
+code-sherlock review -b feature-branch [options]
 ```
 
 Options:
@@ -121,7 +121,7 @@ Options:
 Review a specific file:
 
 ```bash
-code-detective review-file -f <file> -b <branch> [options]
+code-sherlock review-file -f <file> -b <branch> [options]
 ```
 
 Options:
@@ -137,16 +137,16 @@ Options:
 Initialize configuration file:
 
 ```bash
-code-detective init [-c <config-path>]
+code-sherlock init [-c <config-path>]
 ```
 
 ## Programmatic Usage
 
 ```typescript
-import { PRReviewer, ConfigLoader } from 'code-detective';
+import { PRReviewer, ConfigLoader } from 'code-sherlock';
 
 // Load configuration
-const config = ConfigLoader.load('code-detective.config.json');
+const config = ConfigLoader.load('code-sherlock.config.json');
 ConfigLoader.validate(config);
 
 // Create reviewer
@@ -232,21 +232,21 @@ console.log(`Found ${result.stats.warnings} warnings`);
 
 ```bash
 # Review feature branch against main
-code-detective review -b feature/add-auth --base main
+code-sherlock review -b feature/add-auth --base main
 ```
 
 ### Review Without Posting Comments
 
 ```bash
 # Review but don't post comments (useful for testing)
-code-detective review -b feature/add-auth --no-comments
+code-sherlock review -b feature/add-auth --no-comments
 ```
 
 ### Review Specific File Range
 
 ```bash
 # Review lines 10-50 of a specific file
-code-detective review-file \
+code-sherlock review-file \
   -f src/auth.ts \
   -b feature/add-auth \
   --start-line 10 \

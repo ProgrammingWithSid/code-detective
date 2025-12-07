@@ -1,5 +1,5 @@
 {
-    "name": "code-detective",
+    "name": "code-sherlock",
     "version": "1.0.0",
     "description": "AST-based PR reviewer using chunkyyy for semantic code chunking",
     "keywords": [
@@ -10,13 +10,13 @@
         "rag",
         "code-analysis"
     ],
-    "homepage": "https://github.com/ProgrammingWithSid/code-detective#readme",
+    "homepage": "https://github.com/ProgrammingWithSid/code-sherlock#readme",
     "bugs": {
-        "url": "https://github.com/ProgrammingWithSid/code-detective/issues"
+        "url": "https://github.com/ProgrammingWithSid/code-sherlock/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/ProgrammingWithSid/code-detective.git"
+        "url": "git+https://github.com/ProgrammingWithSid/code-sherlock.git"
     },
     "license": "MIT",
     "author": "dev-satender",
@@ -24,7 +24,7 @@
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "bin": {
-        "code-detective": "dist/cli.js"
+        "code-sherlock": "dist/cli.js"
     },
     "directories": {
         "example": "examples"

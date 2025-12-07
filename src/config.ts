@@ -7,7 +7,7 @@ dotenv.config();
 
 export class ConfigLoader {
   static load(configPath?: string): Config {
-    const defaultPath = join(process.cwd(), 'code-detective.config.json');
+    const defaultPath = join(process.cwd(), 'code-sherlock.config.json');
     const path = configPath || defaultPath;
 
     let configData: any = {};

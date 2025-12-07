@@ -2,7 +2,7 @@ import { PRReviewer, ConfigLoader } from '../src/index';
 
 async function main() {
   // Load configuration
-  const config = ConfigLoader.load('code-detective.config.json');
+  const config = ConfigLoader.load('code-sherlock.config.json');
   ConfigLoader.validate(config);
 
   // Create reviewer instance

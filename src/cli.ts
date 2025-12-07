@@ -10,7 +10,7 @@ import { join } from 'path';
 const program = new Command();
 
 program
-  .name('code-detective')
+  .name('code-sherlock')
   .description('AST-based PR reviewer using chunkyyy for semantic code chunking')
   .version('1.0.0');
 
@@ -95,9 +95,9 @@ program
 program
   .command('init')
   .description('Initialize configuration file')
-  .option('-c, --config <path>', 'Path to config file (default: code-detective.config.json)')
+  .option('-c, --config <path>', 'Path to config file (default: code-sherlock.config.json)')
   .action(async (options) => {
-    const configPath = options.config || 'code-detective.config.json';
+    const configPath = options.config || 'code-sherlock.config.json';
 
     if (existsSync(configPath)) {
       console.log(chalk.yellow(`Config file already exists: ${configPath}`));

@@ -1,4 +1,4 @@
-# Contributing to Code Detective
+# Contributing to Code Sherlock
 
 ## Development Setup
 
