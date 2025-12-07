@@ -99,6 +99,37 @@ export class PRReviewer {
     console.log(chalk.yellow(`Warnings: ${filteredResult.stats.warnings}`));
     console.log(chalk.blue(`Suggestions: ${filteredResult.stats.suggestions}`));
 
+    // Display individual comments
+    if (filteredComments.length > 0) {
+      console.log(chalk.blue(`\n📝 Comments:`));
+      filteredComments.forEach((comment, index) => {
+        const severityColor = {
+          error: chalk.red,
+          warning: chalk.yellow,
+          info: chalk.blue,
+          suggestion: chalk.cyan,
+        };
+        const severityEmoji = {
+          error: '🔴',
+          warning: '🟡',
+          info: 'ℹ️',
+          suggestion: '💡',
+        };
+
+        const colorFn = severityColor[comment.severity] || chalk.gray;
+        const emoji = severityEmoji[comment.severity] || '•';
+
+        console.log(colorFn(`\n${index + 1}. ${emoji} ${comment.severity.toUpperCase()}`));
+        console.log(chalk.gray(`   File: ${comment.file}:${comment.line}`));
+        if (comment.rule) {
+          console.log(chalk.gray(`   Rule: ${comment.rule}`));
+        }
+        console.log(`   ${comment.body}`);
+      });
+    } else {
+      console.log(chalk.green(`\n✅ No issues found on changed lines!`));
+    }
+
     // Step 7: Post comments to PR
     if (postComments && this.config.pr?.number) {
       console.log(chalk.blue(`\n💬 Posting comments to PR #${this.config.pr.number}...`));
