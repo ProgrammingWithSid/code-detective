@@ -1,6 +1,6 @@
 {
     "name": "code-sherlock",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "AST-based PR reviewer using chunkyyy for semantic code chunking",
     "keywords": [
         "pr-review",
