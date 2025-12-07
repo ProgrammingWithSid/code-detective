@@ -20,29 +20,43 @@ export class ConfigLoader {
     // Merge with environment variables
     const envConfig: any = {
       aiProvider: process.env.AI_PROVIDER || configData.aiProvider,
-      openai: {
-        apiKey: process.env.OPENAI_API_KEY || configData.openai?.apiKey,
-        model: process.env.OPENAI_MODEL || configData.openai?.model || 'gpt-4-turbo-preview',
-      },
-      claude: {
-        apiKey: process.env.CLAUDE_API_KEY || configData.claude?.apiKey,
-        model: process.env.CLAUDE_MODEL || configData.claude?.model || 'claude-3-5-sonnet-20241022',
-      },
-      github: {
-        token: process.env.GITHUB_TOKEN || configData.github?.token,
-      },
-      gitlab: {
-        token: process.env.GITLAB_TOKEN || configData.gitlab?.token,
-        projectId: process.env.GITLAB_PROJECT_ID || configData.gitlab?.projectId,
-      },
     };
 
-    // Remove undefined values
-    Object.keys(envConfig).forEach(key => {
-      if (envConfig[key] === undefined) {
-        delete envConfig[key];
-      }
-    });
+    // Only add openai if apiKey is provided
+    const openaiApiKey = process.env.OPENAI_API_KEY || configData.openai?.apiKey;
+    if (openaiApiKey) {
+      envConfig.openai = {
+        apiKey: openaiApiKey,
+        model: process.env.OPENAI_MODEL || configData.openai?.model || 'gpt-4-turbo-preview',
+      };
+    }
+
+    // Only add claude if apiKey is provided
+    const claudeApiKey = process.env.CLAUDE_API_KEY || configData.claude?.apiKey;
+    if (claudeApiKey) {
+      envConfig.claude = {
+        apiKey: claudeApiKey,
+        model: process.env.CLAUDE_MODEL || configData.claude?.model || 'claude-3-5-sonnet-20241022',
+      };
+    }
+
+    // Only add github if token is provided
+    const githubToken = process.env.GITHUB_TOKEN || configData.github?.token;
+    if (githubToken) {
+      envConfig.github = {
+        token: githubToken,
+      };
+    }
+
+    // Only add gitlab if token is provided
+    const gitlabToken = process.env.GITLAB_TOKEN || configData.gitlab?.token;
+    const gitlabProjectId = process.env.GITLAB_PROJECT_ID || configData.gitlab?.projectId;
+    if (gitlabToken && gitlabProjectId) {
+      envConfig.gitlab = {
+        token: gitlabToken,
+        projectId: gitlabProjectId,
+      };
+    }
 
     const mergedConfig = {
       ...configData,

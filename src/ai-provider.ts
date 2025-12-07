@@ -1,6 +1,6 @@
-import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
-import { AIProvider, CodeChunk, ReviewResult, ReviewComment, Config } from './types';
+import OpenAI from 'openai';
+import { CodeChunk, Config, ReviewComment, ReviewResult } from './types';
 
 export interface AIProviderInterface {
   reviewCode(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult>;
@@ -60,11 +60,13 @@ export class OpenAIProvider implements AIProviderInterface {
     });
 
     prompt += '\n## Review Instructions\n\n';
+    prompt += '**IMPORTANT**: Only provide comments on lines that were actually changed/added in this PR. ';
+    prompt += 'Do not comment on unchanged code that was included in the chunks for context.\n\n';
     prompt += 'Please review the code chunks above and provide:\n';
     prompt += '1. A summary of findings\n';
     prompt += '2. Specific comments with:\n';
     prompt += '   - File path\n';
-    prompt += '   - Line number\n';
+    prompt += '   - Line number (must be a line that was changed/added)\n';
     prompt += '   - Severity (error, warning, info, suggestion)\n';
     prompt += '   - Description of the issue\n';
     prompt += '   - Suggested fix (if applicable)\n';
@@ -183,11 +185,13 @@ export class ClaudeProvider implements AIProviderInterface {
     });
 
     prompt += '\n## Review Instructions\n\n';
+    prompt += '**IMPORTANT**: Only provide comments on lines that were actually changed/added in this PR. ';
+    prompt += 'Do not comment on unchanged code that was included in the chunks for context.\n\n';
     prompt += 'Please review the code chunks above and provide:\n';
     prompt += '1. A summary of findings\n';
     prompt += '2. Specific comments with:\n';
     prompt += '   - File path\n';
-    prompt += '   - Line number\n';
+    prompt += '   - Line number (must be a line that was changed/added)\n';
     prompt += '   - Severity (error, warning, info, suggestion)\n';
     prompt += '   - Description of the issue\n';
     prompt += '   - Suggested fix (if applicable)\n';

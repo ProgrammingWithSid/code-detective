@@ -160,7 +160,13 @@ export class GitLabCommentService implements PRCommentService {
       throw new Error(`Failed to fetch merge request: ${mrResponse.statusText}`);
     }
 
-    const mr = await mrResponse.json();
+    const mr = await mrResponse.json() as {
+      diff_refs: {
+        base_sha: string;
+        start_sha: string;
+        head_sha: string;
+      };
+    };
 
     // Post comments for each file
     for (const [file, fileComments] of commentsByFile.entries()) {

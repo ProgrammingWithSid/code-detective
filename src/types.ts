@@ -30,7 +30,7 @@ export const ConfigSchema = z.object({
     token: z.string(),
     projectId: z.string(),
   }).optional(),
-});
+}).passthrough(); // Allow extra fields for testing
 
 export type Config = z.infer<typeof ConfigSchema>;
 
@@ -69,4 +69,5 @@ export interface ChangedFile {
   status: 'added' | 'modified' | 'deleted' | 'renamed';
   additions?: number;
   deletions?: number;
+  changedLines?: Set<number>; // Line numbers that were changed (in target branch)
 }

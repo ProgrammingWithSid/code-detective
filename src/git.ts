@@ -40,16 +40,80 @@ export class GitService {
 
       const status = this.mapGitStatus(file);
       if (status) {
+        // Get changed line numbers for this file
+        const changedLines = await this.getChangedLines(file.file, baseBranch, targetBranch);
+
         changedFiles.push({
           path: file.file,
           status,
           additions: file.insertions,
           deletions: file.deletions,
+          changedLines,
         });
       }
     }
 
     return changedFiles;
+  }
+
+  /**
+   * Parse diff to extract line numbers that were changed (added/modified) in the target branch
+   * Returns a Set of line numbers (1-indexed) that were added or modified
+   */
+  async getChangedLines(filePath: string, baseBranch: string, targetBranch: string): Promise<Set<number>> {
+    const changedLines = new Set<number>();
+
+    try {
+      const diff = await this.git.diff([baseBranch, targetBranch, '--', filePath]);
+
+      // If diff is empty, return empty set
+      if (!diff || diff.trim().length === 0) {
+        return changedLines;
+      }
+
+      const lines = diff.split('\n');
+      let currentLineInTarget = 0;
+      let inHunk = false;
+
+      for (const line of lines) {
+        // Hunk header: @@ -old_start,old_count +new_start,new_count @@
+        // Example: @@ -10,5 +10,7 @@ means lines 10-14 in old, 10-16 in new
+        if (line.startsWith('@@')) {
+          const hunkMatch = line.match(/@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,(\d+))?/);
+          if (hunkMatch) {
+            currentLineInTarget = parseInt(hunkMatch[1], 10);
+            inHunk = true;
+            continue;
+          }
+        }
+
+        if (!inHunk) continue;
+
+        // Lines starting with + are additions/modifications in target branch
+        // (modifications appear as deletion followed by addition)
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          changedLines.add(currentLineInTarget);
+          currentLineInTarget++;
+        }
+        // Lines starting with - are deletions in base branch
+        // (don't increment target line counter for deletions)
+        else if (line.startsWith('-') && !line.startsWith('---')) {
+          // Don't increment currentLineInTarget for deletions
+        }
+        // Lines starting with space are context (unchanged lines)
+        else if (line.startsWith(' ')) {
+          currentLineInTarget++;
+        }
+        // Handle empty lines and diff markers
+        else if (line.trim().length === 0 || line.startsWith('\\')) {
+          // No-op for empty lines or diff markers
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to parse diff for ${filePath}:`, error);
+    }
+
+    return changedLines;
   }
 
   async getFileContent(filePath: string, branch?: string): Promise<string> {
