@@ -1,6 +1,6 @@
-import { PRReviewer, ConfigLoader } from '../src/index';
+import { ConfigLoader, PRReviewer, ReviewResult } from '../src/index';
 
-async function main() {
+async function main(): Promise<void> {
   // Load configuration
   const config = ConfigLoader.load('code-sherlock.config.json');
   ConfigLoader.validate(config);
@@ -8,9 +8,9 @@ async function main() {
   // Create reviewer instance
   const reviewer = new PRReviewer(config);
 
-  // Review a PR
+  // Review a PR - reviews commits in the target branch
   console.log('Starting PR review...');
-  const result = await reviewer.reviewPR('feature-branch', 'main', true);
+  const result: ReviewResult = await reviewer.reviewPR('feature-branch', true);
 
   // Display results
   console.log('\n=== Review Summary ===');

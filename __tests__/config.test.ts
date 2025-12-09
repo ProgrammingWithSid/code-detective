@@ -1,6 +1,6 @@
+import { existsSync, readFileSync } from 'fs';
 import { ConfigLoader } from '../src/config';
-import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { ConfigurationError } from '../src/types';
 
 jest.mock('fs');
 jest.mock('dotenv', () => ({
@@ -18,6 +18,11 @@ describe('ConfigLoader', () => {
     delete process.env.OPENAI_API_KEY;
     delete process.env.CLAUDE_API_KEY;
     delete process.env.GITHUB_TOKEN;
+    delete process.env.GITLAB_TOKEN;
+    delete process.env.AI_PROVIDER;
+    delete process.env.OPENAI_MODEL;
+    delete process.env.CLAUDE_MODEL;
+    delete process.env.GITLAB_PROJECT_ID;
   });
 
   afterEach(() => {
@@ -43,14 +48,6 @@ describe('ConfigLoader', () => {
         },
         github: {
           token: 'test-token',
-        },
-        claude: {
-          apiKey: '',
-          model: 'claude-3-5-sonnet-20241022',
-        },
-        gitlab: {
-          token: '',
-          projectId: '',
         },
       };
 
@@ -79,21 +76,6 @@ describe('ConfigLoader', () => {
         pr: {
           number: 123,
         },
-        openai: {
-          apiKey: '',
-          model: 'gpt-4-turbo-preview',
-        },
-        claude: {
-          apiKey: '',
-          model: 'claude-3-5-sonnet-20241022',
-        },
-        github: {
-          token: '',
-        },
-        gitlab: {
-          token: '',
-          projectId: '',
-        },
       };
 
       mockExistsSync.mockReturnValue(true);
@@ -106,19 +88,23 @@ describe('ConfigLoader', () => {
       expect(config.github?.token).toBe('env-token');
     });
 
-    it('should use default config file path if not specified', () => {
+    it('should throw error when config file is invalid JSON', () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue('{ invalid json }');
+
+      expect(() => ConfigLoader.load()).toThrow(ConfigurationError);
+    });
+
+    it('should throw error when required fields are missing', () => {
       mockExistsSync.mockReturnValue(false);
 
-      // Should throw when required fields are missing
-      expect(() => ConfigLoader.load()).toThrow();
-      expect(mockExistsSync).toHaveBeenCalled();
+      expect(() => ConfigLoader.load()).toThrow(ConfigurationError);
     });
 
     it('should use custom config file path if specified', () => {
       mockExistsSync.mockReturnValue(false);
 
-      // Should throw when required fields are missing
-      expect(() => ConfigLoader.load('custom-config.json')).toThrow();
+      expect(() => ConfigLoader.load('custom-config.json')).toThrow(ConfigurationError);
       expect(mockExistsSync).toHaveBeenCalledWith(expect.stringContaining('custom-config.json'));
     });
 
@@ -144,6 +130,90 @@ describe('ConfigLoader', () => {
 
       expect(config.globalRules).toEqual([]);
     });
+
+    it('should load Claude config from environment', () => {
+      process.env.CLAUDE_API_KEY = 'claude-env-key';
+      process.env.CLAUDE_MODEL = 'claude-3-opus';
+
+      const configData = {
+        aiProvider: 'claude',
+        repository: {
+          owner: 'test-org',
+          repo: 'test-repo',
+        },
+        pr: {
+          number: 123,
+        },
+        github: {
+          token: 'test-token',
+        },
+      };
+
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue(JSON.stringify(configData));
+
+      const config = ConfigLoader.load();
+
+      expect(config.claude?.apiKey).toBe('claude-env-key');
+      expect(config.claude?.model).toBe('claude-3-opus');
+    });
+
+    it('should load GitLab config from environment', () => {
+      process.env.GITLAB_TOKEN = 'gitlab-env-token';
+      process.env.GITLAB_PROJECT_ID = 'project-123';
+
+      const configData = {
+        aiProvider: 'openai',
+        openai: {
+          apiKey: 'test-key',
+          model: 'gpt-4',
+        },
+        repository: {
+          owner: 'test-org',
+          repo: 'test-repo',
+        },
+        pr: {
+          number: 123,
+        },
+      };
+
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue(JSON.stringify(configData));
+
+      const config = ConfigLoader.load();
+
+      expect(config.gitlab?.token).toBe('gitlab-env-token');
+      expect(config.gitlab?.projectId).toBe('project-123');
+    });
+
+    it('should prefer environment variables over file config', () => {
+      process.env.OPENAI_API_KEY = 'env-key';
+
+      const configData = {
+        aiProvider: 'openai',
+        openai: {
+          apiKey: 'file-key',
+          model: 'gpt-4',
+        },
+        repository: {
+          owner: 'test-org',
+          repo: 'test-repo',
+        },
+        pr: {
+          number: 123,
+        },
+        github: {
+          token: 'test-token',
+        },
+      };
+
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue(JSON.stringify(configData));
+
+      const config = ConfigLoader.load();
+
+      expect(config.openai?.apiKey).toBe('env-key');
+    });
   });
 
   describe('validate', () => {
@@ -153,6 +223,7 @@ describe('ConfigLoader', () => {
         repository: {
           owner: 'test-org',
           repo: 'test-repo',
+          baseBranch: 'main',
         },
         pr: {
           number: 123,
@@ -160,9 +231,11 @@ describe('ConfigLoader', () => {
         github: {
           token: 'test-token',
         },
+        globalRules: [],
       };
 
-      expect(() => ConfigLoader.validate(config as any)).toThrow('OpenAI API key is required');
+      expect(() => ConfigLoader.validate(config)).toThrow(ConfigurationError);
+      expect(() => ConfigLoader.validate(config)).toThrow('OpenAI API key is required');
     });
 
     it('should throw error if Claude API key is missing', () => {
@@ -171,6 +244,7 @@ describe('ConfigLoader', () => {
         repository: {
           owner: 'test-org',
           repo: 'test-repo',
+          baseBranch: 'main',
         },
         pr: {
           number: 123,
@@ -178,9 +252,11 @@ describe('ConfigLoader', () => {
         github: {
           token: 'test-token',
         },
+        globalRules: [],
       };
 
-      expect(() => ConfigLoader.validate(config as any)).toThrow('Claude API key is required');
+      expect(() => ConfigLoader.validate(config)).toThrow(ConfigurationError);
+      expect(() => ConfigLoader.validate(config)).toThrow('Claude API key is required');
     });
 
     it('should throw error if neither GitHub nor GitLab token is provided', () => {
@@ -188,28 +264,36 @@ describe('ConfigLoader', () => {
         aiProvider: 'openai' as const,
         openai: {
           apiKey: 'test-key',
+          model: 'gpt-4',
         },
         repository: {
           owner: 'test-org',
           repo: 'test-repo',
+          baseBranch: 'main',
         },
         pr: {
           number: 123,
         },
+        globalRules: [],
       };
 
-      expect(() => ConfigLoader.validate(config as any)).toThrow('Either GitHub or GitLab token is required');
+      expect(() => ConfigLoader.validate(config)).toThrow(ConfigurationError);
+      expect(() => ConfigLoader.validate(config)).toThrow(
+        'Either GitHub or GitLab token is required'
+      );
     });
 
-    it('should pass validation with valid config', () => {
+    it('should pass validation with valid OpenAI config', () => {
       const config = {
         aiProvider: 'openai' as const,
         openai: {
           apiKey: 'test-key',
+          model: 'gpt-4',
         },
         repository: {
           owner: 'test-org',
           repo: 'test-repo',
+          baseBranch: 'main',
         },
         pr: {
           number: 123,
@@ -217,9 +301,35 @@ describe('ConfigLoader', () => {
         github: {
           token: 'test-token',
         },
+        globalRules: [],
       };
 
-      expect(() => ConfigLoader.validate(config as any)).not.toThrow();
+      expect(() => ConfigLoader.validate(config)).not.toThrow();
+    });
+
+    it('should pass validation with valid Claude config', () => {
+      const config = {
+        aiProvider: 'claude' as const,
+        claude: {
+          apiKey: 'test-key',
+          model: 'claude-3-sonnet',
+        },
+        repository: {
+          owner: 'test-org',
+          repo: 'test-repo',
+          baseBranch: 'main',
+        },
+        pr: {
+          number: 123,
+        },
+        gitlab: {
+          token: 'test-token',
+          projectId: 'project-123',
+        },
+        globalRules: [],
+      };
+
+      expect(() => ConfigLoader.validate(config)).not.toThrow();
     });
   });
 });

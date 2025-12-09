@@ -1,24 +1,22 @@
 {
   "aiProvider": "openai",
   "openai": {
-    "apiKey": "",
+    "apiKey": "your-openai-api-key",
     "model": "gpt-4-turbo-preview"
   },
   "claude": {
-    "apiKey": "",
+    "apiKey": "your-claude-api-key",
     "model": "claude-3-5-sonnet-20241022"
   },
   "globalRules": [
-    "Check for security vulnerabilities including SQL injection, XSS, and CSRF attacks",
-    "Ensure proper error handling in all async functions",
-    "Verify that sensitive data (passwords, tokens, API keys) is never logged",
-    "Check for memory leaks in long-running processes",
-    "Ensure API endpoints have proper rate limiting and authentication",
-    "Follow TypeScript best practices and type safety",
-    "Check for performance issues like N+1 queries or inefficient algorithms",
-    "Verify that all user inputs are properly validated and sanitized",
-    "Ensure proper logging without exposing sensitive information",
-    "Check for code duplication and suggest refactoring opportunities"
+    "Check for security vulnerabilities including SQL injection, XSS, and CSRF",
+    "Ensure proper error handling with appropriate error messages",
+    "Follow SOLID principles and clean code practices",
+    "Check for potential memory leaks and resource cleanup",
+    "Verify proper input validation and sanitization",
+    "Ensure consistent code style and naming conventions",
+    "Check for potential performance bottlenecks",
+    "Verify proper async/await usage and promise handling"
   ],
   "repository": {
     "owner": "your-org",
@@ -26,13 +24,14 @@
     "baseBranch": "main"
   },
   "pr": {
-    "number": 0
+    "number": 0,
+    "baseBranch": "main"
   },
   "github": {
-    "token": ""
+    "token": "your-github-token"
   },
   "gitlab": {
-    "token": "",
-    "projectId": ""
+    "token": "your-gitlab-token",
+    "projectId": "your-project-id"
   }
 }

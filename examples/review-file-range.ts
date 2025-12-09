@@ -1,6 +1,6 @@
-import { PRReviewer, ConfigLoader } from '../src/index';
+import { ConfigLoader, PRReviewer, ReviewResult } from '../src/index';
 
-async function main() {
+async function main(): Promise<void> {
   // Load configuration
   const config = ConfigLoader.load('code-sherlock.config.json');
   ConfigLoader.validate(config);
@@ -10,11 +10,11 @@ async function main() {
 
   // Review a specific file range
   console.log('Reviewing file range...');
-  const result = await reviewer.reviewFile(
+  const result: ReviewResult = await reviewer.reviewFile(
     'src/utils.ts',
     'feature-branch',
-    10,  // start line
-    50   // end line
+    10, // start line
+    50 // end line
   );
 
   // Display results

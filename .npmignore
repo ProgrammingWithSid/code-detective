@@ -1,0 +1,31 @@
+# Source files
+src/
+
+# Test files
+__tests__/
+coverage/
+*.test.ts
+
+# Config files
+.eslintrc.json
+.gitignore
+tsconfig.json
+jest.config.js
+
+# Development files
+.cursor/
+.vscode/
+.idea/
+
+# Examples (keep in npm for documentation)
+# examples/
+
+# Build artifacts
+*.log
+*.tsbuildinfo
+
+# Misc
+.DS_Store
+Thumbs.db
+Makefile
+CONTRIBUTING.md

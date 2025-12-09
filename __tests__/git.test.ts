@@ -1,7 +1,8 @@
-import { GitService } from '../src/git';
-import simpleGit, { SimpleGit } from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
+import simpleGit, { SimpleGit } from 'simple-git';
+import { GitService } from '../src/git';
+import { GitError } from '../src/types';
 
 jest.mock('simple-git');
 jest.mock('fs');
@@ -16,23 +17,30 @@ describe('GitService', () => {
     mockGit = {
       checkout: jest.fn().mockResolvedValue(undefined),
       fetch: jest.fn().mockResolvedValue(undefined),
-      diffSummary: jest.fn(),
       show: jest.fn(),
       revparse: jest.fn(),
       raw: jest.fn(),
-      diff: jest.fn(),
-    } as any;
+    } as unknown as jest.Mocked<SimpleGit>;
 
-    (simpleGit as jest.MockedFunction<typeof simpleGit>).mockReturnValue(mockGit as any);
+    (simpleGit as jest.MockedFunction<typeof simpleGit>).mockReturnValue(
+      mockGit as unknown as SimpleGit
+    );
     (fs.existsSync as jest.MockedFunction<typeof fs.existsSync>).mockReturnValue(true);
     (path.join as jest.MockedFunction<typeof path.join>).mockReturnValue('/test/repo/.git');
 
     gitService = new GitService('/test/repo');
   });
 
+  describe('constructor', () => {
+    it('should throw GitError if not a git repository', () => {
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+      expect(() => new GitService('/not-a-repo')).toThrow(GitError);
+    });
+  });
+
   describe('checkoutBranch', () => {
     it('should checkout a branch successfully', async () => {
-      mockGit.checkout.mockResolvedValue('' as any);
+      mockGit.checkout.mockResolvedValue('' as never);
 
       await gitService.checkoutBranch('feature-branch');
 
@@ -41,7 +49,7 @@ describe('GitService', () => {
 
     it('should fetch and checkout remote branch if local branch does not exist', async () => {
       mockGit.checkout.mockRejectedValueOnce(new Error('did not match any file'));
-      mockGit.checkout.mockResolvedValueOnce('' as any);
+      mockGit.checkout.mockResolvedValueOnce('' as never);
 
       await gitService.checkoutBranch('remote-branch');
 
@@ -49,25 +57,26 @@ describe('GitService', () => {
       expect(mockGit.checkout).toHaveBeenCalledWith('origin/remote-branch');
     });
 
-    it('should throw error if checkout fails for other reasons', async () => {
+    it('should throw GitError if checkout fails for other reasons', async () => {
       mockGit.checkout.mockRejectedValue(new Error('Permission denied'));
 
-      await expect(gitService.checkoutBranch('feature-branch')).rejects.toThrow('Permission denied');
+      await expect(gitService.checkoutBranch('feature-branch')).rejects.toThrow(GitError);
     });
   });
 
   describe('getChangedFiles', () => {
     it('should return changed files with correct status', async () => {
-      mockGit.diffSummary.mockResolvedValue({
-        files: [
-          { file: 'src/file1.ts', insertions: 10, deletions: 0, binary: false },
-          { file: 'src/file2.ts', insertions: 0, deletions: 5, binary: false },
-          { file: 'src/file3.ts', insertions: 5, deletions: 3, binary: false },
-          { file: 'src/binary.png', insertions: 0, deletions: 0, binary: true },
-        ],
-      } as any);
+      // Mock for detectBaseBranch - first candidate succeeds
+      mockGit.raw
+        .mockResolvedValueOnce('abc123') // merge-base for origin/main (detectBaseBranch)
+        .mockResolvedValueOnce('abc123') // merge-base for actual comparison
+        .mockResolvedValueOnce('commit1\ncommit2\ncommit3') // log
+        .mockResolvedValueOnce('10\t0\tsrc/file1.ts\n0\t5\tsrc/file2.ts\n5\t3\tsrc/file3.ts') // numstat
+        .mockResolvedValueOnce('@@ -1,1 +1,11 @@\n+new content') // file1 diff
+        .mockResolvedValueOnce('@@ -1,5 +1,0 @@\n-old content') // file2 diff
+        .mockResolvedValueOnce('@@ -1,3 +1,5 @@\n+modified content'); // file3 diff
 
-      const changedFiles = await gitService.getChangedFiles('main', 'feature-branch');
+      const changedFiles = await gitService.getChangedFiles('feature-branch');
 
       expect(changedFiles).toHaveLength(3);
       expect(changedFiles[0]).toMatchObject({
@@ -91,17 +100,37 @@ describe('GitService', () => {
     });
 
     it('should exclude binary files', async () => {
-      mockGit.diffSummary.mockResolvedValue({
-        files: [
-          { file: 'src/file.ts', insertions: 10, deletions: 0, binary: false },
-          { file: 'image.png', insertions: 0, deletions: 0, binary: true },
-        ],
-      } as any);
+      mockGit.raw
+        .mockResolvedValueOnce('abc123') // merge-base for origin/main (detectBaseBranch)
+        .mockResolvedValueOnce('abc123') // merge-base for actual comparison
+        .mockResolvedValueOnce('commit1') // log
+        .mockResolvedValueOnce('10\t0\tsrc/file.ts\n-\t-\timage.png') // numstat
+        .mockResolvedValueOnce('@@ -1,1 +1,11 @@\n+new content'); // file diff
 
-      const changedFiles = await gitService.getChangedFiles('main', 'feature-branch');
+      const changedFiles = await gitService.getChangedFiles('feature-branch');
 
       expect(changedFiles).toHaveLength(1);
       expect(changedFiles[0].path).toBe('src/file.ts');
+    });
+
+    it('should return empty array when no commits found', async () => {
+      mockGit.raw.mockResolvedValueOnce('abc123').mockResolvedValueOnce('');
+
+      const changedFiles = await gitService.getChangedFiles('feature-branch');
+
+      expect(changedFiles).toHaveLength(0);
+    });
+
+    it('should use provided base branch', async () => {
+      mockGit.raw
+        .mockResolvedValueOnce('abc123')
+        .mockResolvedValueOnce('commit1')
+        .mockResolvedValueOnce('5\t2\tsrc/file.ts')
+        .mockResolvedValueOnce('@@ -1,2 +1,5 @@\n+new');
+
+      await gitService.getChangedFiles('feature-branch', 'develop');
+
+      expect(mockGit.raw).toHaveBeenCalledWith(['merge-base', 'develop', 'feature-branch']);
     });
   });
 
@@ -121,20 +150,17 @@ index 1234567..abcdefg 100644
  }
 `;
 
-      mockGit.diff.mockResolvedValue(diff);
+      mockGit.raw.mockResolvedValue(diff);
 
-      const changedLines = await gitService.getChangedLines('src/file.ts', 'main', 'feature-branch');
+      const changedLines = await gitService.getChangedLines(
+        'src/file.ts',
+        'abc123',
+        'feature-branch'
+      );
 
       expect(changedLines).toBeInstanceOf(Set);
-      // The hunk starts at line 10 in the new file
-      // The actual parsing gives us [12, 13] which means:
-      // After processing context lines, the additions are at lines 12 and 13
       expect(changedLines.size).toBe(2);
-      // Verify we have the two added lines
-      const linesArray = Array.from(changedLines).sort();
-      expect(linesArray).toEqual([12, 13]);
-      // Verify unchanged lines are not included
-      expect(changedLines.has(11)).toBe(false);
+      expect(Array.from(changedLines).sort()).toEqual([12, 13]);
     });
 
     it('should handle multiple hunks', async () => {
@@ -149,12 +175,16 @@ index 1234567..abcdefg 100644
    line4
 `;
 
-      mockGit.diff.mockResolvedValue(diff);
+      mockGit.raw.mockResolvedValue(diff);
 
-      const changedLines = await gitService.getChangedLines('src/file.ts', 'main', 'feature-branch');
+      const changedLines = await gitService.getChangedLines(
+        'src/file.ts',
+        'abc123',
+        'feature-branch'
+      );
 
-      expect(changedLines.has(6)).toBe(true); // newLine1
-      expect(changedLines.has(22)).toBe(true); // newLine2
+      expect(changedLines.has(6)).toBe(true);
+      expect(changedLines.has(22)).toBe(true);
     });
 
     it('should handle modified lines correctly', async () => {
@@ -165,29 +195,38 @@ index 1234567..abcdefg 100644
    const unchanged = 1;
 `;
 
-      mockGit.diff.mockResolvedValue(diff);
+      mockGit.raw.mockResolvedValue(diff);
 
-      const changedLines = await gitService.getChangedLines('src/file.ts', 'main', 'feature-branch');
+      const changedLines = await gitService.getChangedLines(
+        'src/file.ts',
+        'abc123',
+        'feature-branch'
+      );
 
-      // Modified line: deletion at line 10, addition at line 10 (replacement)
-      // The hunk starts at line 10, so the + line is at line 10
       expect(changedLines.size).toBe(1);
-      expect(changedLines.has(10)).toBe(true); // Modified line (the + line)
-      expect(changedLines.has(11)).toBe(false); // Unchanged line
+      expect(changedLines.has(10)).toBe(true);
     });
 
     it('should return empty set for empty diff', async () => {
-      mockGit.diff.mockResolvedValue('');
+      mockGit.raw.mockResolvedValue('');
 
-      const changedLines = await gitService.getChangedLines('src/file.ts', 'main', 'feature-branch');
+      const changedLines = await gitService.getChangedLines(
+        'src/file.ts',
+        'abc123',
+        'feature-branch'
+      );
 
       expect(changedLines.size).toBe(0);
     });
 
     it('should handle errors gracefully', async () => {
-      mockGit.diff.mockRejectedValue(new Error('File not found'));
+      mockGit.raw.mockRejectedValue(new Error('File not found'));
 
-      const changedLines = await gitService.getChangedLines('src/file.ts', 'main', 'feature-branch');
+      const changedLines = await gitService.getChangedLines(
+        'src/file.ts',
+        'abc123',
+        'feature-branch'
+      );
 
       expect(changedLines.size).toBe(0);
     });
@@ -211,6 +250,12 @@ index 1234567..abcdefg 100644
       expect(mockGit.show).toHaveBeenCalledWith(['HEAD:src/file.ts']);
       expect(content).toBe('file content');
     });
+
+    it('should throw GitError on failure', async () => {
+      mockGit.show.mockRejectedValue(new Error('File not found'));
+
+      await expect(gitService.getFileContent('nonexistent.ts')).rejects.toThrow(GitError);
+    });
   });
 
   describe('getCurrentBranch', () => {
@@ -221,6 +266,38 @@ index 1234567..abcdefg 100644
 
       expect(mockGit.revparse).toHaveBeenCalledWith(['--abbrev-ref', 'HEAD']);
       expect(branch).toBe('feature-branch');
+    });
+  });
+
+  describe('getBaseCommit', () => {
+    it('should return merge base between branches', async () => {
+      mockGit.raw.mockResolvedValue('abc123\n');
+
+      const base = await gitService.getBaseCommit('main', 'feature-branch');
+
+      expect(mockGit.raw).toHaveBeenCalledWith(['merge-base', 'main', 'feature-branch']);
+      expect(base).toBe('abc123');
+    });
+  });
+
+  describe('getDiffForFile', () => {
+    it('should return diff for specific file', async () => {
+      mockGit.raw
+        .mockResolvedValueOnce('abc123') // merge-base for detectBaseBranch
+        .mockResolvedValueOnce('abc123') // merge-base for getMergeBase
+        .mockResolvedValueOnce('diff content'); // actual diff
+
+      const diff = await gitService.getDiffForFile('src/file.ts', 'feature-branch');
+
+      expect(diff).toBe('diff content');
+    });
+
+    it('should return empty string on error', async () => {
+      mockGit.raw.mockRejectedValue(new Error('Failed'));
+
+      const diff = await gitService.getDiffForFile('src/file.ts', 'feature-branch');
+
+      expect(diff).toBe('');
     });
   });
 });
