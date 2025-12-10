@@ -204,10 +204,10 @@ abstract class BaseAIProvider implements AIProviderInterface {
       }
 
       const comments = this.extractComments(parsed);
-      const summary = this.buildSummary(parsed);
+      const { summary, recommendation, topIssues } = this.buildSummary(parsed);
       const stats = this.calculateStats(comments);
 
-      return { comments, summary, stats };
+      return { comments, summary, stats, recommendation, topIssues };
     } catch (error) {
       console.error('Failed to parse AI response:', error);
       console.error('Raw content:', content);
@@ -243,6 +243,8 @@ abstract class BaseAIProvider implements AIProviderInterface {
           body,
           severity: this.mapSeverity(issue.severity),
           rule: category.replace('_', ' '),
+          category: category,
+          fix: issue.fix,
         });
       }
     }
@@ -258,15 +260,27 @@ abstract class BaseAIProvider implements AIProviderInterface {
     );
   }
 
-  private buildSummary(parsed: AIReviewResponse): string {
+  private buildSummary(parsed: AIReviewResponse): {
+    summary: string;
+    recommendation: string;
+    topIssues: string[];
+  } {
     if (parsed.summary) {
       let summary = `**Recommendation:** ${parsed.summary.recommendation ?? 'N/A'}`;
       if (parsed.summary.top_issues && parsed.summary.top_issues.length > 0) {
         summary += `\n\n**Top Issues:**\n${parsed.summary.top_issues.map((i) => `- ${i}`).join('\n')}`;
       }
-      return summary;
+      return {
+        summary,
+        recommendation: parsed.summary.recommendation ?? 'N/A',
+        topIssues: parsed.summary.top_issues ?? [],
+      };
     }
-    return 'Review completed';
+    return {
+      summary: 'Review completed',
+      recommendation: 'N/A',
+      topIssues: [],
+    };
   }
 
   private calculateStats(comments: ReviewComment[]): ReviewResult['stats'] {

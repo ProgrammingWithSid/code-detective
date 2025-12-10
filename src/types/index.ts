@@ -106,6 +106,8 @@ export interface ReviewComment {
   body: string;
   severity: Severity;
   rule?: string;
+  category?: string;
+  fix?: string;
 }
 
 export interface ReviewStats {
@@ -114,10 +116,43 @@ export interface ReviewStats {
   suggestions: number;
 }
 
+export interface ReviewMetadata {
+  reviewedAt: string;
+  target: string;
+  baseBranch: string;
+  duration?: number;
+  aiProvider?: string;
+  model?: string;
+}
+
+export interface ReviewResultJSON {
+  metadata: ReviewMetadata;
+  summary: {
+    recommendation: string;
+    totalIssues: number;
+    errors: number;
+    warnings: number;
+    suggestions: number;
+    topIssues: string[];
+    description: string;
+  };
+  comments: Array<{
+    file: string;
+    line: number;
+    severity: Severity;
+    category: string;
+    message: string;
+    fix: string | null;
+  }>;
+}
+
 export interface ReviewResult {
   comments: ReviewComment[];
   summary: string;
   stats: ReviewStats;
+  recommendation?: string;
+  topIssues?: string[];
+  metadata?: ReviewMetadata;
 }
 
 // ============================================================================
@@ -287,7 +322,7 @@ export interface DefaultConfig {
 // Re-export Command, Webhook, Summary, and AutoFix types
 // ============================================================================
 
-export * from './commands';
-export * from './webhooks';
-export * from './summary';
 export * from './autofix';
+export * from './commands';
+export * from './summary';
+export * from './webhooks';

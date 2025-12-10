@@ -180,9 +180,9 @@ describe('PRCommentService', () => {
       });
 
       const commentBody = mockOctokit.issues.createComment.mock.calls[0][0].body as string;
-      expect(commentBody).toContain('Errors: 2');
-      expect(commentBody).toContain('Warnings: 3');
-      expect(commentBody).toContain('Suggestions: 1');
+      expect(commentBody).toContain('🔴 Errors | 2');
+      expect(commentBody).toContain('🟡 Warnings | 3');
+      expect(commentBody).toContain('💡 Suggestions | 1');
     });
 
     it('should skip comments for files not in PR', async () => {

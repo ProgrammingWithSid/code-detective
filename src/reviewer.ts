@@ -10,9 +10,54 @@ import {
   LineRange,
   ReviewComment,
   ReviewResult,
+  ReviewResultJSON,
   ReviewStats,
   Severity,
 } from './types';
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+/**
+ * Convert ReviewResult to a structured JSON format for export/integration
+ */
+export function reviewResultToJSON(
+  result: ReviewResult,
+  target: string,
+  baseBranch: string,
+  aiProvider?: string,
+  model?: string,
+  duration?: number
+): ReviewResultJSON {
+  return {
+    metadata: {
+      reviewedAt: new Date().toISOString(),
+      target,
+      baseBranch,
+      duration,
+      aiProvider,
+      model,
+    },
+    summary: {
+      recommendation: result.recommendation || 'N/A',
+      totalIssues: result.comments.length,
+      errors: result.stats.errors,
+      warnings: result.stats.warnings,
+      suggestions: result.stats.suggestions,
+      topIssues: result.topIssues || [],
+      description: result.summary,
+    },
+    comments: result.comments.map((c) => ({
+      file: c.file,
+      line: c.line,
+      severity: c.severity,
+      category: c.category || c.rule || 'general',
+      message: c.body,
+      fix: c.fix || null,
+    })),
+  };
+}
 
 // ============================================================================
 // Constants

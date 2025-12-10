@@ -155,11 +155,16 @@ export class GitHubCommentService implements PRCommentService {
 
   private formatComment(comment: ReviewComment): string {
     const emoji = SEVERITY_EMOJI[comment.severity];
-    let body = `${emoji} **${comment.severity.toUpperCase()}**\n\n`;
-    body += `${comment.body}\n\n`;
+    let body = `${emoji} **${comment.severity.toUpperCase()}**`;
 
-    if (comment.rule) {
-      body += `*Rule: ${comment.rule}*\n`;
+    if (comment.category || comment.rule) {
+      body += ` | \`${comment.category || comment.rule}\``;
+    }
+
+    body += `\n\n${comment.body}`;
+
+    if (comment.fix) {
+      body += `\n\n💡 **Suggested Fix:**\n\`\`\`suggestion\n${comment.fix}\n\`\`\``;
     }
 
     return body;
@@ -169,9 +174,11 @@ export class GitHubCommentService implements PRCommentService {
     let body = '## 🔍 Code Review Summary\n\n';
     body += `${summary.summary}\n\n`;
     body += '### Statistics\n\n';
-    body += `- 🔴 Errors: ${summary.stats.errors}\n`;
-    body += `- 🟡 Warnings: ${summary.stats.warnings}\n`;
-    body += `- 💡 Suggestions: ${summary.stats.suggestions}\n`;
+    body += `| Category | Count |\n`;
+    body += `|----------|-------|\n`;
+    body += `| 🔴 Errors | ${summary.stats.errors} |\n`;
+    body += `| 🟡 Warnings | ${summary.stats.warnings} |\n`;
+    body += `| 💡 Suggestions | ${summary.stats.suggestions} |\n`;
 
     return body;
   }
@@ -301,11 +308,16 @@ export class GitLabCommentService implements PRCommentService {
 
   private formatComment(comment: ReviewComment): string {
     const emoji = SEVERITY_EMOJI[comment.severity];
-    let body = `${emoji} **${comment.severity.toUpperCase()}**\n\n`;
-    body += `${comment.body}\n\n`;
+    let body = `${emoji} **${comment.severity.toUpperCase()}**`;
 
-    if (comment.rule) {
-      body += `*Rule: ${comment.rule}*\n`;
+    if (comment.category || comment.rule) {
+      body += ` | \`${comment.category || comment.rule}\``;
+    }
+
+    body += `\n\n${comment.body}`;
+
+    if (comment.fix) {
+      body += `\n\n💡 **Suggested Fix:**\n\`\`\`suggestion\n${comment.fix}\n\`\`\``;
     }
 
     return body;
@@ -315,9 +327,11 @@ export class GitLabCommentService implements PRCommentService {
     let body = '## 🔍 Code Review Summary\n\n';
     body += `${summary.summary}\n\n`;
     body += '### Statistics\n\n';
-    body += `- 🔴 Errors: ${summary.stats.errors}\n`;
-    body += `- 🟡 Warnings: ${summary.stats.warnings}\n`;
-    body += `- 💡 Suggestions: ${summary.stats.suggestions}\n`;
+    body += `| Category | Count |\n`;
+    body += `|----------|-------|\n`;
+    body += `| 🔴 Errors | ${summary.stats.errors} |\n`;
+    body += `| 🟡 Warnings | ${summary.stats.warnings} |\n`;
+    body += `| 💡 Suggestions | ${summary.stats.suggestions} |\n`;
 
     return body;
   }

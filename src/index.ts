@@ -2,7 +2,7 @@
 export { ChunkService } from './chunker';
 export { ConfigLoader } from './config';
 export { GitService } from './git';
-export { PRReviewer } from './reviewer';
+export { PRReviewer, reviewResultToJSON } from './reviewer';
 
 // AI Provider exports
 export {
@@ -14,10 +14,10 @@ export {
 
 // Ollama Provider exports (Local LLM)
 export {
-  OllamaProvider,
-  RECOMMENDED_MODELS,
   createOllamaProvider,
   isOllamaRunning,
+  OllamaProvider,
+  RECOMMENDED_MODELS,
 } from './ai-provider/ollama-provider';
 export type { OllamaConfig } from './ai-provider/ollama-provider';
 
@@ -31,11 +31,10 @@ export {
 
 // Conversation exports
 export {
+  buildContextFromWebhook,
   ChatHandler,
   CodeExplainer,
   CommandParser,
-  TestGenerator,
-  buildContextFromWebhook,
   createChatHandler,
   createCodeExplainer,
   createParser,
@@ -44,6 +43,7 @@ export {
   formatExplanationAsMarkdown,
   formatTestsAsMarkdown,
   hasSherlockCommand,
+  TestGenerator,
 } from './conversation';
 export type {
   ChatHandlerOptions,
@@ -57,30 +57,30 @@ export type {
 
 // Feedback exports
 export {
-  DiagramGenerator,
-  SummaryBuilder,
   createDiagramGenerator,
   createSummaryBuilder,
+  DiagramGenerator,
+  SummaryBuilder,
 } from './feedback';
 
 // Auto-Fix exports
 export {
   AutoFix,
-  FixApplier,
-  FixGenerator,
   createAutoFix,
   createDefaultAutoFix,
   createFixApplier,
   createFixGenerator,
+  FixApplier,
+  FixGenerator,
 } from './autofix';
 export type { AutoFixOptions } from './autofix';
 
 // Analyzers exports
 export {
-  PerformanceAnalyzer,
-  SecurityAnalyzer,
   createPerformanceAnalyzer,
   createSecurityAnalyzer,
+  PerformanceAnalyzer,
+  SecurityAnalyzer,
 } from './analyzers';
 export type {
   PerformanceAnalysisResult,
@@ -132,22 +132,24 @@ export type {
   GitHubConfig,
   GitHubPRWebhookPayload,
   GitLabConfig,
-  GitLabMRWebhookPayload,
   GitLabMergeRequest,
   GitLabMergeRequestDiffRefs,
+  GitLabMRWebhookPayload,
   GitLabNoteWebhookPayload,
   // Utility types
   LineRange,
   NormalizedWebhookEvent,
   OpenAIConfig,
+  ParsedCommand,
   PRConfig,
   PRStats,
   PRSummary,
   PRWalkthrough,
-  ParsedCommand,
   RepositoryConfig,
   ReviewComment,
+  ReviewMetadata,
   ReviewResult,
+  ReviewResultJSON,
   ReviewStats,
   RiskAssessment,
   RiskLevel,
