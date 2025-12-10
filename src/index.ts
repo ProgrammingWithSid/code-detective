@@ -1,89 +1,187 @@
 // Main exports
-export { PRReviewer } from './reviewer';
+export { ChunkService } from './chunker';
 export { ConfigLoader } from './config';
 export { GitService } from './git';
-export { ChunkService } from './chunker';
+export { PRReviewer } from './reviewer';
 
 // AI Provider exports
 export {
   AIProviderFactory,
   AIProviderInterface,
-  OpenAIProvider,
   ClaudeProvider,
+  OpenAIProvider,
 } from './ai-provider';
+
+// Ollama Provider exports (Local LLM)
+export {
+  OllamaProvider,
+  RECOMMENDED_MODELS,
+  createOllamaProvider,
+  isOllamaRunning,
+} from './ai-provider/ollama-provider';
+export type { OllamaConfig } from './ai-provider/ollama-provider';
 
 // PR Comment exports
 export {
-  PRCommentService,
-  PRCommentServiceFactory,
   GitHubCommentService,
   GitLabCommentService,
+  PRCommentService,
+  PRCommentServiceFactory,
 } from './pr-comments';
+
+// Conversation exports
+export {
+  ChatHandler,
+  CodeExplainer,
+  CommandParser,
+  TestGenerator,
+  buildContextFromWebhook,
+  createChatHandler,
+  createCodeExplainer,
+  createParser,
+  createTestGenerator,
+  extractCodeBlock,
+  formatExplanationAsMarkdown,
+  formatTestsAsMarkdown,
+  hasSherlockCommand,
+} from './conversation';
+export type {
+  ChatHandlerOptions,
+  CodeExplanation,
+  ExplanationOptions,
+  GeneratedTest,
+  ParserOptions,
+  TestGenerationOptions,
+  TestGenerationResult,
+} from './conversation';
+
+// Feedback exports
+export {
+  DiagramGenerator,
+  SummaryBuilder,
+  createDiagramGenerator,
+  createSummaryBuilder,
+} from './feedback';
+
+// Auto-Fix exports
+export {
+  AutoFix,
+  FixApplier,
+  FixGenerator,
+  createAutoFix,
+  createDefaultAutoFix,
+  createFixApplier,
+  createFixGenerator,
+} from './autofix';
+export type { AutoFixOptions } from './autofix';
+
+// Analyzers exports
+export {
+  PerformanceAnalyzer,
+  SecurityAnalyzer,
+  createPerformanceAnalyzer,
+  createSecurityAnalyzer,
+} from './analyzers';
+export type {
+  PerformanceAnalysisResult,
+  PerformanceAnalyzerOptions,
+  PerformanceIssue,
+  PerformanceIssueType,
+  PerformancePattern,
+  SecurityAnalysisResult,
+  SecurityAnalyzerOptions,
+  SecurityIssue,
+  SecurityIssueType,
+  SecurityPattern,
+} from './analyzers';
 
 // Type exports
 export type {
-  // Config types
-  Config,
+  // AI types
+  AICategory,
+  AIIssue,
   AIProvider,
-  OpenAIConfig,
+  AIReviewResponse,
+  AISeverity,
+  AISummary,
+  // Summary types
+  ChangeCategory,
+  ChangedFile,
+  ChunkyyyChunk,
   ClaudeConfig,
-  RepositoryConfig,
-  PRConfig,
-  GitHubConfig,
-  GitLabConfig,
-
   // Code types
   CodeChunk,
-  ChunkyyyChunk,
-
-  // Review types
-  Severity,
-  ReviewComment,
-  ReviewStats,
-  ReviewResult,
-
-  // AI types
-  AISeverity,
-  AIIssue,
-  AICategory,
-  AISummary,
-  AIReviewResponse,
-
+  CodeSuggestion,
+  CommandContext,
+  CommandHandler,
+  CommandRegistry,
+  CommandResponse,
+  CommandType,
+  // Config types
+  Config,
+  DefaultConfig,
+  DiagramOptions,
+  DiagramType,
+  DiffHunk,
+  FileChange,
+  FileGroup,
+  FileLanguageMap,
   // Git types
   FileStatus,
-  ChangedFile,
-  DiffHunk,
-
-  // GitLab types
+  GitHubCommentWebhookPayload,
+  GitHubConfig,
+  GitHubPRWebhookPayload,
+  GitLabConfig,
+  GitLabMRWebhookPayload,
   GitLabMergeRequest,
   GitLabMergeRequestDiffRefs,
-
+  GitLabNoteWebhookPayload,
   // Utility types
   LineRange,
-  FileLanguageMap,
-  DefaultConfig,
+  NormalizedWebhookEvent,
+  OpenAIConfig,
+  PRConfig,
+  PRStats,
+  PRSummary,
+  PRWalkthrough,
+  ParsedCommand,
+  RepositoryConfig,
+  ReviewComment,
+  ReviewResult,
+  ReviewStats,
+  RiskAssessment,
+  RiskLevel,
+  Severity,
+  SummaryOptions,
+  SummaryRecommendation,
+  WalkthroughSection,
+  WebhookHandler,
+  WebhookPlatform,
 } from './types';
 
 // Error exports
 export {
+  AIProviderError,
   CodeSherlockError,
   ConfigurationError,
   GitError,
-  AIProviderError,
   PRCommentError,
 } from './types';
 
 // Schema exports (for validation)
 export {
-  ConfigSchema,
   AIProviderSchema,
-  OpenAIConfigSchema,
   ClaudeConfigSchema,
-  RepositoryConfigSchema,
-  PRConfigSchema,
+  ConfigSchema,
   GitHubConfigSchema,
   GitLabConfigSchema,
+  OpenAIConfigSchema,
+  PRConfigSchema,
+  RepositoryConfigSchema,
 } from './types';
 
 // Type guard exports
-export { isAIReviewResponse, isAIIssue } from './types';
+export { isAIIssue, isAIReviewResponse } from './types';
+
+// Command constants
+export { COMMAND_HELP, COMMAND_PREFIX, CommandType as CommandTypes } from './types/commands';

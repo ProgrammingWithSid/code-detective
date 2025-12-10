@@ -1,0 +1,244 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  # Auto-review on PR open/update
+  auto-review:
+    name: Auto Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v41
+        with:
+          files: |
+            **/*.ts
+            **/*.tsx
+            **/*.js
+            **/*.jsx
+          files_ignore: |
+            **/*.test.ts
+            **/*.spec.ts
+            __tests__/**
+
+      - name: Run Security Scan
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          echo "## 🔒 Security Scan Results" > security-report.md
+          echo "" >> security-report.md
+          node dist/cli/index.js security -p . -o markdown --files ${{ steps.changed-files.outputs.all_changed_files }} >> security-report.md 2>&1 || true
+
+      - name: Run Performance Analysis
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          echo "## ⚡ Performance Analysis" > perf-report.md
+          echo "" >> perf-report.md
+          node dist/cli/index.js perf -p . -o markdown --files ${{ steps.changed-files.outputs.all_changed_files }} >> perf-report.md 2>&1 || true
+
+      - name: Combine reports
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          echo "# 🔍 Code-Sherlock Review" > review.md
+          echo "" >> review.md
+          echo "Automated code review for PR #${{ github.event.pull_request.number }}" >> review.md
+          echo "" >> review.md
+          echo "---" >> review.md
+          echo "" >> review.md
+          cat security-report.md >> review.md
+          echo "" >> review.md
+          echo "---" >> review.md
+          echo "" >> review.md
+          cat perf-report.md >> review.md
+          echo "" >> review.md
+          echo "---" >> review.md
+          echo "" >> review.md
+          echo "_Powered by [Code-Sherlock](https://github.com/ProgrammingWithSid/code-sherlock)_" >> review.md
+
+      - name: Post review comment
+        if: steps.changed-files.outputs.any_changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const review = fs.readFileSync('review.md', 'utf8');
+
+            // Find existing bot comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('🔍 Code-Sherlock Review')
+            );
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: review
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: review
+              });
+            }
+
+  # Handle @sherlock commands in comments
+  command-handler:
+    name: Handle Commands
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@sherlock')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Parse command
+        id: parse
+        run: |
+          COMMENT="${{ github.event.comment.body }}"
+
+          if [[ "$COMMENT" == *"@sherlock review security"* ]]; then
+            echo "command=security" >> $GITHUB_OUTPUT
+          elif [[ "$COMMENT" == *"@sherlock review performance"* ]] || [[ "$COMMENT" == *"@sherlock review perf"* ]]; then
+            echo "command=performance" >> $GITHUB_OUTPUT
+          elif [[ "$COMMENT" == *"@sherlock review"* ]]; then
+            echo "command=review" >> $GITHUB_OUTPUT
+          elif [[ "$COMMENT" == *"@sherlock help"* ]]; then
+            echo "command=help" >> $GITHUB_OUTPUT
+          else
+            echo "command=unknown" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run security review
+        if: steps.parse.outputs.command == 'security'
+        run: |
+          echo "## 🔒 Security Review" > response.md
+          echo "" >> response.md
+          echo "_Requested by @${{ github.event.comment.user.login }}_" >> response.md
+          echo "" >> response.md
+          node dist/cli/index.js security -o markdown >> response.md
+
+      - name: Run performance review
+        if: steps.parse.outputs.command == 'performance'
+        run: |
+          echo "## ⚡ Performance Review" > response.md
+          echo "" >> response.md
+          echo "_Requested by @${{ github.event.comment.user.login }}_" >> response.md
+          echo "" >> response.md
+          node dist/cli/index.js perf -o markdown >> response.md
+
+      - name: Run full review
+        if: steps.parse.outputs.command == 'review'
+        run: |
+          echo "## 🔍 Full Code Review" > response.md
+          echo "" >> response.md
+          echo "_Requested by @${{ github.event.comment.user.login }}_" >> response.md
+          echo "" >> response.md
+          node dist/cli/index.js review -o markdown >> response.md
+
+      - name: Show help
+        if: steps.parse.outputs.command == 'help'
+        run: |
+          cat << 'EOF' > response.md
+          ## 🔍 Code-Sherlock Commands
+
+          | Command | Description |
+          |---------|-------------|
+          | `@sherlock review` | Full code review (security + performance) |
+          | `@sherlock review security` | Security-focused review |
+          | `@sherlock review performance` | Performance-focused review |
+          | `@sherlock help` | Show this help message |
+
+          ### Examples
+
+          ```
+          @sherlock review
+          @sherlock review security
+          @sherlock review perf
+          ```
+
+          _Powered by [Code-Sherlock](https://github.com/ProgrammingWithSid/code-sherlock)_
+          EOF
+
+      - name: Post response
+        if: steps.parse.outputs.command != 'unknown'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const response = fs.readFileSync('response.md', 'utf8');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: response
+            });
+
+      - name: React to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const command = '${{ steps.parse.outputs.command }}';
+            const reaction = command === 'unknown' ? 'confused' : 'rocket';
+
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: reaction
+            });

@@ -1,0 +1,251 @@
+name: 'Code-Sherlock Review'
+description: 'AI-powered code review, security scanning, and performance analysis'
+author: 'dev-satender'
+
+branding:
+  icon: 'search'
+  color: 'blue'
+
+inputs:
+  mode:
+    description: 'Review mode: review, security, performance, or all'
+    required: false
+    default: 'all'
+  path:
+    description: 'Path to analyze'
+    required: false
+    default: '.'
+  config:
+    description: 'Path to config file'
+    required: false
+    default: '.sherlockrc.json'
+  output:
+    description: 'Output format: console, json, markdown, sarif'
+    required: false
+    default: 'markdown'
+  openai-api-key:
+    description: 'OpenAI API key for AI-powered features'
+    required: false
+  anthropic-api-key:
+    description: 'Anthropic API key for Claude'
+    required: false
+  min-severity:
+    description: 'Minimum severity for security scan: info, warning, error'
+    required: false
+    default: 'warning'
+  min-impact:
+    description: 'Minimum impact for performance: low, medium, high'
+    required: false
+    default: 'medium'
+  threshold:
+    description: 'Performance score threshold (0-100)'
+    required: false
+    default: '0'
+  fail-on-issues:
+    description: 'Fail the action if issues are found'
+    required: false
+    default: 'false'
+  post-comment:
+    description: 'Post review as PR comment'
+    required: false
+    default: 'true'
+  sarif-file:
+    description: 'SARIF output file path'
+    required: false
+    default: ''
+
+outputs:
+  security-issues:
+    description: 'Number of security issues found'
+    value: ${{ steps.analyze.outputs.security-issues }}
+  performance-score:
+    description: 'Performance score (0-100)'
+    value: ${{ steps.analyze.outputs.performance-score }}
+  performance-issues:
+    description: 'Number of performance issues found'
+    value: ${{ steps.analyze.outputs.performance-issues }}
+  has-issues:
+    description: 'Whether any issues were found'
+    value: ${{ steps.analyze.outputs.has-issues }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install Code-Sherlock
+      shell: bash
+      run: npm install -g code-sherlock
+
+    - name: Run Analysis
+      id: analyze
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        # Initialize variables
+        SECURITY_ISSUES=0
+        PERF_SCORE=100
+        PERF_ISSUES=0
+        HAS_ISSUES=false
+
+        # Create output directory
+        mkdir -p .sherlock-output
+
+        # Security scan
+        if [[ "${{ inputs.mode }}" == "security" ]] || [[ "${{ inputs.mode }}" == "all" ]]; then
+          echo "Running security scan..."
+
+          SARIF_ARG=""
+          if [[ -n "${{ inputs.sarif-file }}" ]]; then
+            SARIF_ARG="--sarif ${{ inputs.sarif-file }}"
+          fi
+
+          sherlock security \
+            -p "${{ inputs.path }}" \
+            -o json \
+            --min-severity ${{ inputs.min-severity }} \
+            $SARIF_ARG > .sherlock-output/security.json 2>&1 || true
+
+          SECURITY_ISSUES=$(jq '.issues | length' .sherlock-output/security.json 2>/dev/null || echo "0")
+
+          if [[ "$SECURITY_ISSUES" -gt 0 ]]; then
+            HAS_ISSUES=true
+          fi
+
+          # Generate markdown
+          sherlock security \
+            -p "${{ inputs.path }}" \
+            -o markdown \
+            --min-severity ${{ inputs.min-severity }} > .sherlock-output/security.md 2>&1 || true
+        fi
+
+        # Performance analysis
+        if [[ "${{ inputs.mode }}" == "performance" ]] || [[ "${{ inputs.mode }}" == "all" ]]; then
+          echo "Running performance analysis..."
+
+          sherlock perf \
+            -p "${{ inputs.path }}" \
+            -o json \
+            --min-impact ${{ inputs.min-impact }} > .sherlock-output/perf.json 2>&1 || true
+
+          PERF_SCORE=$(jq '.score // 100' .sherlock-output/perf.json 2>/dev/null || echo "100")
+          PERF_ISSUES=$(jq '.issues | length' .sherlock-output/perf.json 2>/dev/null || echo "0")
+
+          if [[ "$PERF_ISSUES" -gt 0 ]]; then
+            HAS_ISSUES=true
+          fi
+
+          # Generate markdown
+          sherlock perf \
+            -p "${{ inputs.path }}" \
+            -o markdown \
+            --min-impact ${{ inputs.min-impact }} > .sherlock-output/perf.md 2>&1 || true
+        fi
+
+        # Full review
+        if [[ "${{ inputs.mode }}" == "review" ]]; then
+          echo "Running full review..."
+
+          sherlock review \
+            -p "${{ inputs.path }}" \
+            -o markdown > .sherlock-output/review.md 2>&1 || true
+        fi
+
+        # Set outputs
+        echo "security-issues=$SECURITY_ISSUES" >> $GITHUB_OUTPUT
+        echo "performance-score=$PERF_SCORE" >> $GITHUB_OUTPUT
+        echo "performance-issues=$PERF_ISSUES" >> $GITHUB_OUTPUT
+        echo "has-issues=$HAS_ISSUES" >> $GITHUB_OUTPUT
+
+        # Print summary
+        echo "## Code-Sherlock Analysis Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Security Issues:** $SECURITY_ISSUES" >> $GITHUB_STEP_SUMMARY
+        echo "- **Performance Score:** $PERF_SCORE/100" >> $GITHUB_STEP_SUMMARY
+        echo "- **Performance Issues:** $PERF_ISSUES" >> $GITHUB_STEP_SUMMARY
+
+    - name: Combine Reports
+      if: inputs.post-comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      run: |
+        echo "# 🔍 Code-Sherlock Review" > .sherlock-output/combined.md
+        echo "" >> .sherlock-output/combined.md
+
+        if [[ -f ".sherlock-output/security.md" ]]; then
+          cat .sherlock-output/security.md >> .sherlock-output/combined.md
+          echo "" >> .sherlock-output/combined.md
+          echo "---" >> .sherlock-output/combined.md
+          echo "" >> .sherlock-output/combined.md
+        fi
+
+        if [[ -f ".sherlock-output/perf.md" ]]; then
+          cat .sherlock-output/perf.md >> .sherlock-output/combined.md
+          echo "" >> .sherlock-output/combined.md
+        fi
+
+        if [[ -f ".sherlock-output/review.md" ]]; then
+          cat .sherlock-output/review.md >> .sherlock-output/combined.md
+        fi
+
+        echo "" >> .sherlock-output/combined.md
+        echo "---" >> .sherlock-output/combined.md
+        echo "_Powered by [Code-Sherlock](https://github.com/ProgrammingWithSid/code-sherlock)_" >> .sherlock-output/combined.md
+
+    - name: Post PR Comment
+      if: inputs.post-comment == 'true' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const report = fs.readFileSync('.sherlock-output/combined.md', 'utf8');
+
+          // Find existing comment
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const botComment = comments.find(c =>
+            c.user.type === 'Bot' &&
+            c.body.includes('🔍 Code-Sherlock Review')
+          );
+
+          if (botComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: report
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: report
+            });
+          }
+
+    - name: Check Thresholds
+      if: inputs.fail-on-issues == 'true'
+      shell: bash
+      run: |
+        HAS_ISSUES="${{ steps.analyze.outputs.has-issues }}"
+        PERF_SCORE="${{ steps.analyze.outputs.performance-score }}"
+        THRESHOLD="${{ inputs.threshold }}"
+
+        if [[ "$HAS_ISSUES" == "true" ]]; then
+          echo "::error::Issues found during analysis"
+          exit 1
+        fi
+
+        if [[ "$THRESHOLD" -gt 0 ]] && [[ "$PERF_SCORE" -lt "$THRESHOLD" ]]; then
+          echo "::error::Performance score ($PERF_SCORE) is below threshold ($THRESHOLD)"
+          exit 1
+        fi
