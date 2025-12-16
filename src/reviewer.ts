@@ -144,13 +144,11 @@ export class PRReviewer {
     this.reviewQualityScorer = new ReviewQualityScorer();
 
     // Initialize review tracker for incremental reviews (if enabled)
-    if (config.incrementalReview) {
-      const incrementalReview = config.incrementalReview as IncrementalReviewConfig;
-      if (incrementalReview.enabled) {
-        const storagePath = String(incrementalReview.storagePath || '.sherlock-reviews');
-        const maxHistorySize = Number(incrementalReview.maxHistorySize || 10000);
-        this.reviewTracker = new ReviewTracker(storagePath, maxHistorySize);
-      }
+    if (config.incrementalReview?.enabled) {
+      const incrementalReview = config.incrementalReview;
+      const storagePath = String(incrementalReview.storagePath || '.sherlock-reviews');
+      const maxHistorySize = Number(incrementalReview.maxHistorySize || 10000);
+      this.reviewTracker = new ReviewTracker(storagePath, maxHistorySize);
     }
   }
 

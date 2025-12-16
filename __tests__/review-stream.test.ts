@@ -114,7 +114,6 @@ describe('ReviewStream', () => {
 
       // Complete first batch
       stream.batchComplete(0, [], 5);
-      const firstProgress = onProgressSpy.mock.calls[1][0];
 
       // Complete second batch
       stream.batchComplete(1, [], 5);
