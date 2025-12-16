@@ -85,15 +85,25 @@ describe('PRCommentService', () => {
         { file: 'src/file2.ts', line: 5, body: 'Issue 3', severity: 'info' },
       ];
 
+      // Mock PR files with patch data to make comments actionable (in diff)
       mockOctokit.pulls.listFiles.mockResolvedValue({
         data: [
-          { filename: 'src/file1.ts', sha: 'sha1' },
-          { filename: 'src/file2.ts', sha: 'sha2' },
+          {
+            filename: 'src/file1.ts',
+            sha: 'sha1',
+            patch: '@@ -8,0 +10,2 @@\n+line 10\n+line 15',
+          },
+          {
+            filename: 'src/file2.ts',
+            sha: 'sha2',
+            patch: '@@ -3,0 +5,1 @@\n+line 5',
+          },
         ],
       });
 
       await service.postComments(comments, 123);
 
+      // Should post inline comments for actionable comments (2 files)
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(2);
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -104,6 +114,8 @@ describe('PRCommentService', () => {
           event: 'COMMENT',
         })
       );
+      // Should also post summary comment
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledTimes(1);
     });
 
     it('should format comments with severity emoji', async () => {
@@ -117,12 +129,21 @@ describe('PRCommentService', () => {
         },
       ];
 
+      // Mock PR file with patch to make comment actionable (in diff)
       mockOctokit.pulls.listFiles.mockResolvedValue({
-        data: [{ filename: 'src/file.ts', sha: 'sha1' }],
+        data: [
+          {
+            filename: 'src/file.ts',
+            sha: 'sha1',
+            patch: '@@ -8,0 +10,1 @@\n+line 10',
+          },
+        ],
       });
 
       await service.postComments(comments, 123);
 
+      // Check inline comment formatting
+      expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(1);
       const reviewCall = mockOctokit.pulls.createReview.mock.calls[0][0] as {
         comments: Array<{ body: string }>;
       };
@@ -146,12 +167,21 @@ describe('PRCommentService', () => {
           { file: 'src/file.ts', line: 10, body: 'Message', severity: severities[i] },
         ];
 
+        // Mock PR file with patch to make comment actionable (in diff)
         mockOctokit.pulls.listFiles.mockResolvedValue({
-          data: [{ filename: 'src/file.ts', sha: 'sha1' }],
+          data: [
+            {
+              filename: 'src/file.ts',
+              sha: 'sha1',
+              patch: '@@ -8,0 +10,1 @@\n+line 10',
+            },
+          ],
         });
 
         await service.postComments(comments, 123);
 
+        // Check inline comment formatting
+        expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(1);
         const reviewCall = mockOctokit.pulls.createReview.mock.calls[0][0] as {
           comments: Array<{ body: string }>;
         };
