@@ -173,6 +173,16 @@ export interface ReviewResultJSON {
   }>;
 }
 
+export interface ReviewQualityMetrics {
+  accuracy: number;
+  actionability: number;
+  coverage: number;
+  precision: number;
+  recall: number;
+  overallScore: number;
+  confidence: number;
+}
+
 export interface ReviewResult {
   comments: ReviewComment[];
   summary: string;
@@ -180,6 +190,7 @@ export interface ReviewResult {
   recommendation?: string;
   topIssues?: string[];
   metadata?: ReviewMetadata;
+  qualityMetrics?: ReviewQualityMetrics;
 }
 
 // ============================================================================

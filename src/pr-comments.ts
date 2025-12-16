@@ -31,12 +31,23 @@ export interface PRCommentService {
 interface GitHubPRFile {
   filename: string;
   sha: string;
+  additions?: number;
+  deletions?: number;
+  changes?: number;
+  patch?: string;
 }
 
 interface GitHubReviewComment {
   path: string;
   line: number;
   body: string;
+}
+
+interface CommentCategory {
+  actionable: ReviewComment[];
+  outsideDiff: ReviewComment[];
+  nitpicks: ReviewComment[];
+  cautions: ReviewComment[];
 }
 
 // ============================================================================
@@ -62,15 +73,26 @@ export class GitHubCommentService implements PRCommentService {
   }
 
   async postComments(comments: ReviewComment[], prNumber: number): Promise<void> {
-    const commentsByFile = this.groupCommentsByFile(comments);
-
-    for (const [file, fileComments] of commentsByFile.entries()) {
-      await this.postFileComments(file, fileComments, prNumber);
+    if (comments.length === 0) {
+      return;
     }
+
+    // Get PR files to determine diff ranges
+    const prFiles = await this.getPRFiles(prNumber);
+    const prFilesMap = new Map(prFiles.map((f) => [f.filename, f]));
+
+    // Categorize comments
+    const categorized = this.categorizeComments(comments, prFilesMap);
+
+    // Post inline comments for actionable comments within diff range
+    await this.postInlineComments(categorized.actionable, prNumber, prFilesMap);
+
+    // Post summary comment with categorized sections
+    await this.postSummaryComment(categorized, prNumber);
   }
 
   async postReviewSummary(summary: ReviewResult, prNumber: number): Promise<void> {
-    const body = this.formatSummary(summary);
+    const body = this.formatReviewSummary(summary);
 
     try {
       await this.octokit.issues.createComment({
@@ -101,37 +123,6 @@ export class GitHubCommentService implements PRCommentService {
     return commentsByFile;
   }
 
-  private async postFileComments(
-    file: string,
-    comments: ReviewComment[],
-    prNumber: number
-  ): Promise<void> {
-    try {
-      const prFiles = await this.getPRFiles(prNumber);
-      const prFile = prFiles.find((f) => f.filename === file);
-
-      if (!prFile) {
-        console.warn(`File ${file} not found in PR files`);
-        return;
-      }
-
-      const reviewComments = this.formatReviewComments(comments);
-
-      await this.octokit.pulls.createReview({
-        owner: this.owner,
-        repo: this.repo,
-        pull_number: prNumber,
-        commit_id: prFile.sha,
-        body: `Found ${comments.length} issue(s) in ${file}`,
-        event: 'COMMENT',
-        comments: reviewComments,
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to post comments for ${file}: ${errorMessage}`);
-    }
-  }
-
   private async getPRFiles(prNumber: number): Promise<GitHubPRFile[]> {
     const { data: prFiles } = await this.octokit.pulls.listFiles({
       owner: this.owner,
@@ -139,10 +130,195 @@ export class GitHubCommentService implements PRCommentService {
       pull_number: prNumber,
     });
 
-    return prFiles.map((f) => ({
-      filename: f.filename,
-      sha: f.sha,
-    }));
+    return prFiles.map(
+      (f): GitHubPRFile => ({
+        filename: f.filename,
+        sha: f.sha,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch ?? undefined,
+      })
+    );
+  }
+
+  private categorizeComments(
+    comments: ReviewComment[],
+    prFilesMap: Map<string, GitHubPRFile>
+  ): CommentCategory {
+    const actionable: ReviewComment[] = [];
+    const outsideDiff: ReviewComment[] = [];
+    const nitpicks: ReviewComment[] = [];
+    const cautions: ReviewComment[] = [];
+
+    for (const comment of comments) {
+      const prFile = prFilesMap.get(comment.file);
+      const isInDiff = this.isCommentInDiff(comment, prFile);
+
+      if (isInDiff) {
+        actionable.push(comment);
+      } else {
+        outsideDiff.push(comment);
+      }
+
+      // Categorize by severity
+      if (comment.severity === 'error' || comment.severity === 'warning') {
+        cautions.push(comment);
+      } else {
+        nitpicks.push(comment);
+      }
+    }
+
+    return { actionable, outsideDiff, nitpicks, cautions };
+  }
+
+  private isCommentInDiff(comment: ReviewComment, prFile?: GitHubPRFile): boolean {
+    if (!prFile || !prFile.patch) {
+      return false;
+    }
+
+    // Parse patch to get line ranges
+    const patchLines = prFile.patch.split('\n');
+    let currentLine = 0;
+
+    for (const line of patchLines) {
+      if (line.startsWith('@@')) {
+        const match = line.match(/@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,(\d+))?/);
+        if (match?.[1]) {
+          currentLine = parseInt(match[1], 10);
+        }
+        continue;
+      }
+
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        if (currentLine === comment.line) {
+          return true;
+        }
+        currentLine++;
+      } else if (line.startsWith(' ') || line.startsWith('-')) {
+        if (!line.startsWith('---') && !line.startsWith('+++')) {
+          if (line.startsWith(' ')) {
+            currentLine++;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private async postInlineComments(
+    comments: ReviewComment[],
+    prNumber: number,
+    prFilesMap: Map<string, GitHubPRFile>
+  ): Promise<void> {
+    if (comments.length === 0) {
+      return;
+    }
+
+    const commentsByFile = this.groupCommentsByFile(comments);
+
+    for (const [file, fileComments] of commentsByFile.entries()) {
+      const prFile = prFilesMap.get(file);
+      if (!prFile) {
+        continue;
+      }
+
+      const reviewComments = this.formatReviewComments(fileComments);
+
+      try {
+        await this.octokit.pulls.createReview({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+          commit_id: prFile.sha,
+          body: '',
+          event: 'COMMENT',
+          comments: reviewComments,
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`Failed to post inline comments for ${file}: ${errorMessage}`);
+      }
+    }
+  }
+
+  private async postSummaryComment(categorized: CommentCategory, prNumber: number): Promise<void> {
+    const actionableCount = categorized.actionable.length;
+    const outsideDiffCount = categorized.outsideDiff.length;
+    const nitpickCount = categorized.nitpicks.length;
+
+    let body = `**Actionable comments posted: ${actionableCount}**\n\n`;
+
+    // Caution section for errors/warnings
+    if (categorized.cautions.length > 0) {
+      body += `> ⚠️ **Caution**\n`;
+      body += `> Some comments are outside the diff and can't be posted inline due to platform limitations.\n\n`;
+    }
+
+    // Outside diff range comments
+    if (outsideDiffCount > 0) {
+      body += `<details>\n`;
+      body += `<summary>⚠️ Outside diff range comments (${outsideDiffCount})</summary>\n\n`;
+      body += this.formatCommentsList(categorized.outsideDiff);
+      body += `</details>\n\n`;
+    }
+
+    // Nitpick comments
+    if (nitpickCount > 0) {
+      body += `<details>\n`;
+      body += `<summary>✏️ Nitpick comments (${nitpickCount})</summary>\n\n`;
+      body += this.formatCommentsList(categorized.nitpicks);
+      body += `</details>\n\n`;
+    }
+
+    // Review details
+    body += `<details>\n`;
+    body += `<summary>📄 Review details</summary>\n\n`;
+    body += `- **Total comments:** ${categorized.actionable.length + categorized.outsideDiff.length}\n`;
+    body += `- **Inline comments:** ${categorized.actionable.length}\n`;
+    body += `- **Outside diff:** ${outsideDiffCount}\n`;
+    body += `- **Errors/Warnings:** ${categorized.cautions.length}\n`;
+    body += `- **Suggestions:** ${nitpickCount}\n`;
+    body += `</details>\n`;
+
+    try {
+      await this.octokit.issues.createComment({
+        owner: this.owner,
+        repo: this.repo,
+        issue_number: prNumber,
+        body,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to post summary comment: ${errorMessage}`);
+    }
+  }
+
+  private formatCommentsList(comments: ReviewComment[]): string {
+    const commentsByFile = this.groupCommentsByFile(comments);
+    let result = '';
+
+    for (const [file, fileComments] of commentsByFile.entries()) {
+      result += `**\`${file}\`**\n\n`;
+      for (const comment of fileComments) {
+        result += `- **Line ${comment.line}:** ${this.formatCommentInline(comment)}\n`;
+      }
+      result += '\n';
+    }
+
+    return result;
+  }
+
+  private formatCommentInline(comment: ReviewComment): string {
+    const emoji = SEVERITY_EMOJI[comment.severity];
+    let text = `${emoji} ${comment.body}`;
+
+    if (comment.category || comment.rule) {
+      text += ` \`${comment.category || comment.rule}\``;
+    }
+
+    return text;
   }
 
   private formatReviewComments(comments: ReviewComment[]): GitHubReviewComment[] {
@@ -170,15 +346,28 @@ export class GitHubCommentService implements PRCommentService {
     return body;
   }
 
-  private formatSummary(summary: ReviewResult): string {
+  private formatReviewSummary(summary: ReviewResult): string {
     let body = '## 🔍 Code Review Summary\n\n';
     body += `${summary.summary}\n\n`;
+
+    if (summary.topIssues && summary.topIssues.length > 0) {
+      body += '### Top Issues\n\n';
+      for (const issue of summary.topIssues) {
+        body += `- ${issue}\n`;
+      }
+      body += '\n';
+    }
+
     body += '### Statistics\n\n';
     body += `| Category | Count |\n`;
     body += `|----------|-------|\n`;
     body += `| 🔴 Errors | ${summary.stats.errors} |\n`;
     body += `| 🟡 Warnings | ${summary.stats.warnings} |\n`;
     body += `| 💡 Suggestions | ${summary.stats.suggestions} |\n`;
+
+    if (summary.recommendation) {
+      body += `\n**Recommendation:** ${summary.recommendation}\n`;
+    }
 
     return body;
   }
@@ -218,7 +407,7 @@ export class GitLabCommentService implements PRCommentService {
   }
 
   async postReviewSummary(summary: ReviewResult, prNumber: number): Promise<void> {
-    const body = this.formatSummary(summary);
+    const body = this.formatReviewSummary(summary);
 
     try {
       await this.postNote(prNumber, body);
@@ -226,6 +415,32 @@ export class GitLabCommentService implements PRCommentService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`Failed to post review summary: ${errorMessage}`);
     }
+  }
+
+  private formatReviewSummary(summary: ReviewResult): string {
+    let body = '## 🔍 Code Review Summary\n\n';
+    body += `${summary.summary}\n\n`;
+
+    if (summary.topIssues && summary.topIssues.length > 0) {
+      body += '### Top Issues\n\n';
+      for (const issue of summary.topIssues) {
+        body += `- ${issue}\n`;
+      }
+      body += '\n';
+    }
+
+    body += '### Statistics\n\n';
+    body += `| Category | Count |\n`;
+    body += `|----------|-------|\n`;
+    body += `| 🔴 Errors | ${summary.stats.errors} |\n`;
+    body += `| 🟡 Warnings | ${summary.stats.warnings} |\n`;
+    body += `| 💡 Suggestions | ${summary.stats.suggestions} |\n`;
+
+    if (summary.recommendation) {
+      body += `\n**Recommendation:** ${summary.recommendation}\n`;
+    }
+
+    return body;
   }
 
   // ============================================================================
@@ -319,19 +534,6 @@ export class GitLabCommentService implements PRCommentService {
     if (comment.fix) {
       body += `\n\n💡 **Suggested Fix:**\n\`\`\`suggestion\n${comment.fix}\n\`\`\``;
     }
-
-    return body;
-  }
-
-  private formatSummary(summary: ReviewResult): string {
-    let body = '## 🔍 Code Review Summary\n\n';
-    body += `${summary.summary}\n\n`;
-    body += '### Statistics\n\n';
-    body += `| Category | Count |\n`;
-    body += `|----------|-------|\n`;
-    body += `| 🔴 Errors | ${summary.stats.errors} |\n`;
-    body += `| 🟡 Warnings | ${summary.stats.warnings} |\n`;
-    body += `| 💡 Suggestions | ${summary.stats.suggestions} |\n`;
 
     return body;
   }

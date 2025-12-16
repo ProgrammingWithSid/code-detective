@@ -1,5 +1,6 @@
 import { AIProviderInterface } from '../ai-provider';
 import { CodeChunk, ReviewComment, ReviewResult } from '../types';
+import type { ReviewStream } from './review-stream';
 
 /**
  * Configuration for parallel review processing
@@ -35,7 +36,8 @@ export class ParallelReviewer {
   async reviewBatches(
     batches: CodeChunk[][],
     aiProvider: AIProviderInterface,
-    globalRules: string[]
+    globalRules: string[],
+    stream?: ReviewStream | undefined
   ): Promise<ReviewResult> {
     const results: ReviewResult[] = [];
 
@@ -47,11 +49,31 @@ export class ParallelReviewer {
         batchGroup.map((batch) => this.reviewBatchWithTimeout(batch, aiProvider, globalRules))
       );
 
+      // Emit batch completion for streaming
+      if (stream) {
+        // TypeScript guard: stream is defined here
+        const streamInstance: ReviewStream = stream as ReviewStream;
+        for (let j = 0; j < batchResults.length; j++) {
+          const batchIndex = i + j;
+          const batchResult = batchResults[j];
+          if (batchResult) {
+            const batchComments = batchResult.comments;
+            streamInstance.batchComplete(batchIndex, batchComments, batches.length);
+            // Emit individual comments
+            batchComments.forEach((comment) => streamInstance.emitComment(comment));
+          }
+        }
+      }
+
       results.push(...batchResults);
     }
 
     // Merge results
-    return this.mergeResults(results);
+    const merged = this.mergeResults(results);
+    if (stream) {
+      stream.complete(merged);
+    }
+    return merged;
   }
 
   /**

@@ -4,20 +4,24 @@ import { ChunkService } from './chunker';
 import { GitService } from './git';
 import { PRCommentService, PRCommentServiceFactory } from './pr-comments';
 import {
-  ChangedFile,
-  CodeChunk,
-  Config,
-  LineRange,
-  ReviewComment,
-  ReviewResult,
-  ReviewResultJSON,
-  ReviewStats,
-  Severity,
+    ChangedFile,
+    CodeChunk,
+    Config,
+    IncrementalReviewConfig,
+    LineRange,
+    ReviewComment,
+    ReviewResult,
+    ReviewResultJSON,
+    ReviewStats,
+    Severity,
 } from './types';
 import { ChunkBatcher } from './utils/chunk-batcher';
 import { CommentDeduplicator } from './utils/comment-deduplicator';
+import { CommentPrioritizer } from './utils/comment-prioritizer';
 import { ParallelReviewer } from './utils/parallel-reviewer';
 import { ReviewCache } from './utils/review-cache';
+import { ReviewQualityScorer } from './utils/review-quality';
+import { ReviewStream, ReviewStreamCallbacks } from './utils/review-stream';
 import { ReviewTracker } from './utils/review-tracker';
 import { RuleBasedFilter } from './utils/rule-based-filter';
 
@@ -98,6 +102,8 @@ export class PRReviewer {
   private parallelReviewer: ParallelReviewer;
   private ruleBasedFilter: RuleBasedFilter;
   private commentDeduplicator: CommentDeduplicator;
+  private commentPrioritizer: CommentPrioritizer;
+  private reviewQualityScorer: ReviewQualityScorer;
   private reviewTracker?: ReviewTracker;
 
   constructor(config: Config, repoPath?: string) {
@@ -131,12 +137,20 @@ export class PRReviewer {
     // Initialize comment deduplicator
     this.commentDeduplicator = new CommentDeduplicator(0.6);
 
+    // Initialize comment prioritizer
+    this.commentPrioritizer = new CommentPrioritizer();
+
+    // Initialize review quality scorer
+    this.reviewQualityScorer = new ReviewQualityScorer();
+
     // Initialize review tracker for incremental reviews (if enabled)
-    const incrementalReview = config.incrementalReview;
-    if (incrementalReview && incrementalReview.enabled) {
-      const storagePath = String(incrementalReview.storagePath || '.sherlock-reviews');
-      const maxHistorySize = Number(incrementalReview.maxHistorySize || 10000);
-      this.reviewTracker = new ReviewTracker(storagePath, maxHistorySize);
+    if (config.incrementalReview) {
+      const incrementalReview = config.incrementalReview as IncrementalReviewConfig;
+      if (incrementalReview.enabled) {
+        const storagePath = String(incrementalReview.storagePath || '.sherlock-reviews');
+        const maxHistorySize = Number(incrementalReview.maxHistorySize || 10000);
+        this.reviewTracker = new ReviewTracker(storagePath, maxHistorySize);
+      }
     }
   }
 
@@ -145,11 +159,13 @@ export class PRReviewer {
    * @param targetBranch - The feature/PR branch to review
    * @param postComments - Whether to post comments to the PR
    * @param baseBranchOverride - Optional base branch override
+   * @param streamCallbacks - Optional callbacks for streaming review progress
    */
   async reviewPR(
     targetBranch: string,
     postComments: boolean = true,
-    baseBranchOverride?: string
+    baseBranchOverride?: string,
+    streamCallbacks?: ReviewStreamCallbacks
   ): Promise<ReviewResult> {
     const baseBranch = this.resolveBaseBranch(baseBranchOverride);
 
@@ -243,22 +259,30 @@ export class PRReviewer {
         )
       );
 
+      // Initialize streaming if callbacks provided
+      const stream = streamCallbacks ? new ReviewStream(streamCallbacks) : undefined;
+      if (stream) {
+        stream.start(batches.length);
+      }
+
       // Review batches in parallel
       if (batches.length > 1) {
         console.log(chalk.blue(`⚡ Processing ${batches.length} batches in parallel...`));
-        const reviewBatchesPromise: Promise<ReviewResult> = this.parallelReviewer.reviewBatches(
+        reviewResult = await this.parallelReviewer.reviewBatches(
           batches,
           this.aiProvider,
-          this.config.globalRules
+          this.config.globalRules,
+          stream
         );
-        reviewResult = await reviewBatchesPromise;
       } else {
         // Single batch - use regular review
-        const reviewCodePromise: Promise<ReviewResult> = this.aiProvider.reviewCode(
-          chunksToReview,
-          this.config.globalRules
-        );
-        reviewResult = await reviewCodePromise;
+        reviewResult = await this.aiProvider.reviewCode(chunksToReview, this.config.globalRules);
+        if (stream) {
+          // Emit comments for single batch
+          reviewResult.comments.forEach((comment) => stream.emitComment(comment));
+          stream.batchComplete(0, reviewResult.comments, batches.length);
+          stream.complete(reviewResult);
+        }
       }
 
       // Cache the result
@@ -266,8 +290,13 @@ export class PRReviewer {
       console.log(chalk.gray('💾 Cached review results for future use'));
     }
 
+    // Ensure reviewResult is not null
+    if (!reviewResult) {
+      throw new Error('Review result is null');
+    }
+
     // Step 5: Merge rule-based and AI comments
-    const allComments = [...ruleBasedComments, ...reviewResult.comments];
+    const allComments: ReviewComment[] = [...ruleBasedComments, ...reviewResult.comments];
 
     // Step 5.5: Deduplicate comments
     const { comments: deduplicatedComments, stats: dedupStats } =
@@ -281,9 +310,35 @@ export class PRReviewer {
       );
     }
 
+    // Step 5.5: Prioritize comments (critical issues first)
+    const prioritizedComments = this.commentPrioritizer.prioritizeComments(deduplicatedComments);
+    const priorityGroups = this.commentPrioritizer.groupByPriority(prioritizedComments);
+
+    if (priorityGroups.critical.length > 0) {
+      console.log(
+        chalk.red(
+          `🚨 Found ${priorityGroups.critical.length} critical issue(s) requiring immediate attention`
+        )
+      );
+    }
+
+    const qualityMetrics = this.reviewQualityScorer.calculateQualityMetrics(
+      {
+        ...reviewResult,
+        comments: deduplicatedComments,
+      },
+      chunks.length,
+      chunksToReview.length
+    );
+
     const mergedResult: ReviewResult = {
       ...reviewResult,
-      comments: deduplicatedComments,
+      comments: prioritizedComments.map((c) => {
+        // Remove priority fields before returning (they're internal)
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { priority, priorityReason, ...comment } = c;
+        return comment;
+      }),
       stats: {
         errors: deduplicatedComments.filter((c) => c.severity === 'error').length,
         warnings: deduplicatedComments.filter((c) => c.severity === 'warning').length,
@@ -291,7 +346,20 @@ export class PRReviewer {
           (c) => c.severity === 'suggestion' || c.severity === 'info'
         ).length,
       },
+      qualityMetrics,
     };
+
+    // Display quality metrics
+    if (qualityMetrics.overallScore > 0) {
+      console.log(
+        chalk.blue(
+          `📊 Review Quality Score: ${qualityMetrics.overallScore.toFixed(1)}/100 ` +
+            `(Accuracy: ${qualityMetrics.accuracy.toFixed(1)}%, ` +
+            `Actionability: ${qualityMetrics.actionability.toFixed(1)}%, ` +
+            `Coverage: ${qualityMetrics.coverage.toFixed(1)}%)`
+        )
+      );
+    }
 
     // Step 6: Display all comments
     this.displayAllComments(mergedResult);
@@ -388,9 +456,42 @@ export class PRReviewer {
       return;
     }
 
-    result.comments.forEach((comment, index) => {
-      this.displayComment(comment, index + 1);
-    });
+    // Group by priority for display
+    const prioritized = this.commentPrioritizer.prioritizeComments(result.comments);
+    const groups = this.commentPrioritizer.groupByPriority(prioritized);
+
+    let displayIndex = 1;
+
+    // Display critical issues first
+    if (groups.critical.length > 0) {
+      console.log(chalk.red(`\n🚨 Critical Issues (${groups.critical.length}):`));
+      groups.critical.forEach((comment) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { priority, priorityReason, ...displayComment } = comment;
+        this.displayComment(displayComment, displayIndex++);
+      });
+    }
+
+    // Then high priority
+    if (groups.high.length > 0) {
+      console.log(chalk.yellow(`\n⚠️  High Priority (${groups.high.length}):`));
+      groups.high.forEach((comment) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { priority, priorityReason, ...displayComment } = comment;
+        this.displayComment(displayComment, displayIndex++);
+      });
+    }
+
+    // Then medium and low (if any)
+    const remaining = [...groups.medium, ...groups.low];
+    if (remaining.length > 0) {
+      console.log(chalk.gray(`\n💡 Other Issues (${remaining.length}):`));
+      remaining.forEach((comment) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { priority, priorityReason, ...displayComment } = comment;
+        this.displayComment(displayComment, displayIndex++);
+      });
+    }
   }
 
   private displayComment(comment: ReviewComment, index: number): void {
