@@ -13,6 +13,7 @@ import {
   ReviewResult,
   Severity,
 } from './types';
+import { ContextAwarePromptBuilder } from './utils/context-aware-prompt';
 
 // ============================================================================
 // Constants
@@ -144,14 +145,31 @@ export interface AIProviderInterface {
 
 abstract class BaseAIProvider implements AIProviderInterface {
   protected model: string;
+  protected promptBuilder: ContextAwarePromptBuilder;
+  protected useContextAwarePrompts: boolean;
 
-  constructor(model: string) {
+  constructor(model: string, useContextAwarePrompts: boolean = true) {
     this.model = model;
+    this.useContextAwarePrompts = useContextAwarePrompts;
+    this.promptBuilder = new ContextAwarePromptBuilder();
   }
 
   abstract reviewCode(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult>;
 
   protected buildPrompt(chunks: CodeChunk[], globalRules: string[]): string {
+    if (this.useContextAwarePrompts) {
+      // Extract context from chunks
+      const context = ContextAwarePromptBuilder.extractContext(chunks);
+
+      // Build context-aware prompt
+      return this.promptBuilder.buildPrompt(chunks, globalRules, context);
+    }
+
+    // Fallback to simple prompt
+    return this.buildSimplePrompt(chunks, globalRules);
+  }
+
+  protected buildSimplePrompt(chunks: CodeChunk[], globalRules: string[]): string {
     let prompt = '# Code Review Request\n\n';
 
     if (globalRules.length > 0) {

@@ -39,10 +39,11 @@ export interface TestGenerationResult {
 
 const TEMPLATES = {
   jest: {
-    describe: (name: string, tests: string) => `describe('${name}', () => {\n${tests}\n});`,
-    it: (name: string, code: string) => `  it('${name}', () => {\n${code}\n  });`,
-    itAsync: (name: string, code: string) => `  it('${name}', async () => {\n${code}\n  });`,
-    expect: (actual: string, matcher: string, expected?: string) =>
+    describe: (name: string, tests: string): string => `describe('${name}', () => {\n${tests}\n});`,
+    it: (name: string, code: string): string => `  it('${name}', () => {\n${code}\n  });`,
+    itAsync: (name: string, code: string): string =>
+      `  it('${name}', async () => {\n${code}\n  });`,
+    expect: (actual: string, matcher: string, expected?: string): string =>
       expected
         ? `    expect(${actual}).${matcher}(${expected});`
         : `    expect(${actual}).${matcher}();`,

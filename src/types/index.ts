@@ -51,6 +51,29 @@ export const GitLabConfigSchema = z.object({
 });
 export type GitLabConfig = z.infer<typeof GitLabConfigSchema>;
 
+export const ReviewCacheConfigSchema = z.object({
+  ttl: z.number().optional(), // Time to live in milliseconds
+  maxSize: z.number().optional(), // Maximum cache size
+});
+
+export const BatchingConfigSchema = z.object({
+  maxTokens: z.number().optional(), // Maximum tokens per batch
+  maxChunks: z.number().optional(), // Maximum chunks per batch
+  groupByFile: z.boolean().optional(), // Group chunks by file
+});
+
+export const ParallelConfigSchema = z.object({
+  concurrency: z.number().optional(), // Maximum concurrent batches
+  timeout: z.number().optional(), // Timeout per batch in milliseconds
+});
+
+export const IncrementalReviewConfigSchema = z.object({
+  enabled: z.boolean().optional(), // Enable incremental reviews
+  storagePath: z.string().optional(), // Path to store review state
+  maxHistorySize: z.number().optional(), // Maximum number of reviewed chunks to track
+});
+export type IncrementalReviewConfig = z.infer<typeof IncrementalReviewConfigSchema>;
+
 export const ConfigSchema = z.object({
   aiProvider: AIProviderSchema,
   openai: OpenAIConfigSchema.optional(),
@@ -60,6 +83,10 @@ export const ConfigSchema = z.object({
   pr: PRConfigSchema,
   github: GitHubConfigSchema.optional(),
   gitlab: GitLabConfigSchema.optional(),
+  reviewCache: ReviewCacheConfigSchema.optional(),
+  batching: BatchingConfigSchema.optional(),
+  parallel: ParallelConfigSchema.optional(),
+  incrementalReview: IncrementalReviewConfigSchema.optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

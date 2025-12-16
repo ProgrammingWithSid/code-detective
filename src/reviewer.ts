@@ -14,6 +14,12 @@ import {
   ReviewStats,
   Severity,
 } from './types';
+import { ChunkBatcher } from './utils/chunk-batcher';
+import { CommentDeduplicator } from './utils/comment-deduplicator';
+import { ParallelReviewer } from './utils/parallel-reviewer';
+import { ReviewCache } from './utils/review-cache';
+import { ReviewTracker } from './utils/review-tracker';
+import { RuleBasedFilter } from './utils/rule-based-filter';
 
 // ============================================================================
 // Utility Functions
@@ -83,17 +89,55 @@ const SEVERITY_EMOJI: Record<Severity, string> = {
 
 export class PRReviewer {
   private config: Config;
-  private git: GitService;
-  private chunker: ChunkService;
-  private aiProvider: AIProviderInterface;
-  private prCommentService: PRCommentService;
+  protected git: GitService;
+  protected chunker: ChunkService;
+  protected aiProvider: AIProviderInterface;
+  protected prCommentService: PRCommentService;
+  private reviewCache: ReviewCache;
+  private chunkBatcher: ChunkBatcher;
+  private parallelReviewer: ParallelReviewer;
+  private ruleBasedFilter: RuleBasedFilter;
+  private commentDeduplicator: CommentDeduplicator;
+  private reviewTracker?: ReviewTracker;
 
   constructor(config: Config, repoPath?: string) {
     this.config = config;
-    this.git = new GitService(repoPath);
-    this.chunker = new ChunkService(repoPath);
+    const resolvedRepoPath: string = repoPath ?? process.cwd();
+    this.git = new GitService(resolvedRepoPath);
+    this.chunker = new ChunkService(resolvedRepoPath);
     this.aiProvider = AIProviderFactory.create(config);
     this.prCommentService = PRCommentServiceFactory.create(config);
+
+    // Initialize review cache (24 hour TTL, max 500 cached reviews)
+    const cacheTTL = config.reviewCache?.ttl || 24 * 60 * 60 * 1000;
+    const cacheMaxSize = config.reviewCache?.maxSize || 500;
+    this.reviewCache = new ReviewCache(cacheTTL, cacheMaxSize);
+
+    // Initialize chunk batcher and parallel reviewer
+    this.chunkBatcher = new ChunkBatcher({
+      maxTokens: config.batching?.maxTokens || 8000,
+      maxChunks: config.batching?.maxChunks || 50,
+      groupByFile: config.batching?.groupByFile ?? true,
+    });
+
+    this.parallelReviewer = new ParallelReviewer({
+      concurrency: config.parallel?.concurrency || 3,
+      timeout: config.parallel?.timeout || 60000,
+    });
+
+    // Initialize rule-based filter
+    this.ruleBasedFilter = new RuleBasedFilter();
+
+    // Initialize comment deduplicator
+    this.commentDeduplicator = new CommentDeduplicator(0.6);
+
+    // Initialize review tracker for incremental reviews (if enabled)
+    const incrementalReview = config.incrementalReview;
+    if (incrementalReview && incrementalReview.enabled) {
+      const storagePath = String(incrementalReview.storagePath || '.sherlock-reviews');
+      const maxHistorySize = Number(incrementalReview.maxHistorySize || 10000);
+      this.reviewTracker = new ReviewTracker(storagePath, maxHistorySize);
+    }
   }
 
   /**
@@ -113,11 +157,16 @@ export class PRReviewer {
 
     // Step 1: Checkout to target branch
     console.log(chalk.blue(`\n🔀 Checking out to branch: ${targetBranch}`));
-    await this.git.checkoutBranch(targetBranch);
+    const checkoutPromise: Promise<void> = this.git.checkoutBranch(targetBranch);
+    await checkoutPromise;
 
     // Step 2: Get changed files
     console.log(chalk.blue(`\n📁 Detecting changes unique to ${targetBranch}...`));
-    const changedFiles = await this.git.getChangedFiles(targetBranch, baseBranch);
+    const changedFilesPromise: Promise<ChangedFile[]> = this.git.getChangedFiles(
+      targetBranch,
+      baseBranch
+    );
+    const changedFiles = await changedFilesPromise;
     console.log(chalk.green(`Found ${changedFiles.length} changed file(s)`));
 
     if (changedFiles.length === 0) {
@@ -126,33 +175,155 @@ export class PRReviewer {
 
     // Step 3: Chunk the changed files
     console.log(chalk.blue(`\n🔪 Chunking code using chunkyyy...`));
-    const chunks = await this.chunker.chunkChangedFiles(changedFiles, targetBranch);
+    const chunksPromise: Promise<CodeChunk[]> = this.chunker.chunkChangedFiles(
+      changedFiles,
+      targetBranch
+    );
+    const chunks = await chunksPromise;
     console.log(chalk.green(`Generated ${chunks.length} code chunk(s)`));
 
     if (chunks.length === 0) {
       return this.createEmptyResult('No code chunks could be generated from changed files.');
     }
 
-    // Step 4: Review code with AI
+    // Step 3.25: Filter chunks for incremental review (if enabled)
+    let chunksToReview = chunks;
+    if (this.reviewTracker) {
+      const { chunksToReview: filteredChunks, stats: trackerStats } =
+        this.reviewTracker.filterChunksForReview(chunks, targetBranch, baseBranch);
+
+      chunksToReview = filteredChunks;
+
+      if (trackerStats.skippedChunks > 0) {
+        console.log(
+          chalk.green(
+            `⚡ Incremental review: Skipping ${trackerStats.skippedChunks} already-reviewed chunk(s) ` +
+              `(${Math.round(trackerStats.skipRate * 100)}% reduction)`
+          )
+        );
+      }
+      if (trackerStats.newChunks > 0 || trackerStats.changedChunks > 0) {
+        console.log(
+          chalk.gray(
+            `   ${trackerStats.newChunks} new chunk(s), ${trackerStats.changedChunks} changed chunk(s)`
+          )
+        );
+      }
+    }
+
+    // Step 3.5: Run rule-based pre-filtering
+    console.log(chalk.blue(`\n🔍 Running rule-based pre-filtering...`));
+    const ruleBasedIssues = this.ruleBasedFilter.analyzeChunks(chunksToReview);
+    const ruleBasedComments = this.ruleBasedFilter.convertToReviewComments(ruleBasedIssues);
+    console.log(chalk.green(`Found ${ruleBasedComments.length} issue(s) via rule-based analysis`));
+
+    // Step 4: Review code with AI (with caching and batching)
     console.log(chalk.blue(`\n🤖 Reviewing code with ${this.config.aiProvider}...`));
     console.log(
-      chalk.gray(`Using ${chunks.length} chunk(s) and ${this.config.globalRules.length} rule(s)`)
+      chalk.gray(
+        `Using ${chunksToReview.length} chunk(s) and ${this.config.globalRules.length} rule(s)`
+      )
     );
 
-    const reviewResult = await this.aiProvider.reviewCode(chunks, this.config.globalRules);
+    // Check cache first
+    const cacheKey = this.reviewCache.generateCacheKey(chunksToReview);
+    let reviewResult = this.reviewCache.get(cacheKey);
 
-    // Step 5: Display all comments
-    this.displayAllComments(reviewResult);
+    if (reviewResult) {
+      console.log(chalk.green('✅ Using cached review results'));
+    } else {
+      // Batch chunks for efficient processing
+      const batches = this.chunkBatcher.batchChunks(chunksToReview);
+      const batchStats = this.chunkBatcher.getBatchStats(batches);
 
-    // Step 6: Filter comments to changed lines
+      console.log(
+        chalk.gray(
+          `📦 Batched into ${batchStats.totalBatches} batch(es) ` +
+            `(avg ${Math.round(batchStats.averageBatchSize)} chunks/batch)`
+        )
+      );
+
+      // Review batches in parallel
+      if (batches.length > 1) {
+        console.log(chalk.blue(`⚡ Processing ${batches.length} batches in parallel...`));
+        const reviewBatchesPromise: Promise<ReviewResult> = this.parallelReviewer.reviewBatches(
+          batches,
+          this.aiProvider,
+          this.config.globalRules
+        );
+        reviewResult = await reviewBatchesPromise;
+      } else {
+        // Single batch - use regular review
+        const reviewCodePromise: Promise<ReviewResult> = this.aiProvider.reviewCode(
+          chunksToReview,
+          this.config.globalRules
+        );
+        reviewResult = await reviewCodePromise;
+      }
+
+      // Cache the result
+      this.reviewCache.set(cacheKey, reviewResult);
+      console.log(chalk.gray('💾 Cached review results for future use'));
+    }
+
+    // Step 5: Merge rule-based and AI comments
+    const allComments = [...ruleBasedComments, ...reviewResult.comments];
+
+    // Step 5.5: Deduplicate comments
+    const { comments: deduplicatedComments, stats: dedupStats } =
+      this.commentDeduplicator.deduplicate(allComments);
+    if (dedupStats.duplicatesRemoved > 0) {
+      console.log(
+        chalk.gray(
+          `🔗 Deduplicated ${dedupStats.duplicatesRemoved} duplicate comment(s) ` +
+            `(${Math.round(dedupStats.deduplicationRate * 100)}% reduction)`
+        )
+      );
+    }
+
+    const mergedResult: ReviewResult = {
+      ...reviewResult,
+      comments: deduplicatedComments,
+      stats: {
+        errors: deduplicatedComments.filter((c) => c.severity === 'error').length,
+        warnings: deduplicatedComments.filter((c) => c.severity === 'warning').length,
+        suggestions: deduplicatedComments.filter(
+          (c) => c.severity === 'suggestion' || c.severity === 'info'
+        ).length,
+      },
+    };
+
+    // Step 6: Display all comments
+    this.displayAllComments(mergedResult);
+
+    // Step 7: Filter comments to changed lines
     const filteredResult = this.filterAndDisplayFilteredComments(
-      reviewResult,
+      mergedResult,
       changedFiles,
       chunks
     );
 
     // Step 7: Post comments to PR
-    await this.postCommentsIfEnabled(postComments, filteredResult);
+    const postCommentsPromise: Promise<void> = this.postCommentsIfEnabled(
+      postComments,
+      filteredResult
+    );
+    await postCommentsPromise;
+
+    // Step 8: Mark chunks as reviewed (for incremental reviews)
+    if (this.reviewTracker && chunksToReview.length > 0) {
+      const commentsForTracking = filteredResult.comments.map((c) => ({
+        file: c.file,
+        line: c.line,
+        body: c.body,
+      }));
+      this.reviewTracker.markAsReviewed(
+        chunksToReview,
+        commentsForTracking,
+        targetBranch,
+        baseBranch
+      );
+    }
 
     return filteredResult;
   }
@@ -172,10 +343,20 @@ export class PRReviewer {
   ): Promise<ReviewResult> {
     console.log(chalk.blue(`📋 Reviewing file: ${filePath}`));
 
-    const chunks = await this.getFileChunks(filePath, branch, startLine, endLine);
+    const chunksPromise: Promise<CodeChunk[]> = this.getFileChunks(
+      filePath,
+      branch,
+      startLine,
+      endLine
+    );
+    const chunks = await chunksPromise;
     console.log(chalk.green(`Generated ${chunks.length} code chunk(s)`));
 
-    const reviewResult = await this.aiProvider.reviewCode(chunks, this.config.globalRules);
+    const reviewCodePromise: Promise<ReviewResult> = this.aiProvider.reviewCode(
+      chunks,
+      this.config.globalRules
+    );
+    const reviewResult = await reviewCodePromise;
     this.displayReviewSummary(reviewResult);
 
     return reviewResult;
@@ -414,11 +595,18 @@ export class PRReviewer {
   ): Promise<CodeChunk[]> {
     if (startLine !== undefined && endLine !== undefined) {
       console.log(chalk.blue(`Using range ${startLine}-${endLine}`));
-      const chunk = await this.chunker.chunkFileByRange(filePath, startLine, endLine, branch);
+      const chunkFileByRangePromise: Promise<CodeChunk> = this.chunker.chunkFileByRange(
+        filePath,
+        startLine,
+        endLine,
+        branch
+      );
+      const chunk = await chunkFileByRangePromise;
       return [chunk];
     }
 
-    return await this.chunker.chunkFile(filePath, branch);
+    const chunkFilePromise: Promise<CodeChunk[]> = this.chunker.chunkFile(filePath, branch);
+    return await chunkFilePromise;
   }
 
   // ============================================================================
@@ -448,5 +636,19 @@ export class PRReviewer {
 
     await this.prCommentService.postReviewSummary(result, prNumber);
     console.log(chalk.green('Posted review summary'));
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats(): ReturnType<ReviewCache['getStats']> {
+    return this.reviewCache.getStats();
+  }
+
+  /**
+   * Clear review cache
+   */
+  clearCache(): void {
+    this.reviewCache.clear();
   }
 }
