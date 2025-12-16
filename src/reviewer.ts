@@ -4,16 +4,16 @@ import { ChunkService } from './chunker';
 import { GitService } from './git';
 import { PRCommentService, PRCommentServiceFactory } from './pr-comments';
 import {
-    ChangedFile,
-    CodeChunk,
-    Config,
-    IncrementalReviewConfig,
-    LineRange,
-    ReviewComment,
-    ReviewResult,
-    ReviewResultJSON,
-    ReviewStats,
-    Severity,
+  ChangedFile,
+  CodeChunk,
+  Config,
+  IncrementalReviewConfig,
+  LineRange,
+  ReviewComment,
+  ReviewResult,
+  ReviewResultJSON,
+  ReviewStats,
+  Severity,
 } from './types';
 import { ChunkBatcher } from './utils/chunk-batcher';
 import { CommentDeduplicator } from './utils/comment-deduplicator';

@@ -194,9 +194,33 @@ describe('ReviewQualityScorer', () => {
 
     it('should identify stable trend', () => {
       const history = [
-        { overallScore: 70, accuracy: 70, actionability: 70, coverage: 70, precision: 70, recall: 70, confidence: 70 },
-        { overallScore: 72, accuracy: 72, actionability: 72, coverage: 72, precision: 72, recall: 72, confidence: 72 },
-        { overallScore: 71, accuracy: 71, actionability: 71, coverage: 71, precision: 71, recall: 71, confidence: 71 },
+        {
+          overallScore: 70,
+          accuracy: 70,
+          actionability: 70,
+          coverage: 70,
+          precision: 70,
+          recall: 70,
+          confidence: 70,
+        },
+        {
+          overallScore: 72,
+          accuracy: 72,
+          actionability: 72,
+          coverage: 72,
+          precision: 72,
+          recall: 72,
+          confidence: 72,
+        },
+        {
+          overallScore: 71,
+          accuracy: 71,
+          actionability: 71,
+          coverage: 71,
+          precision: 71,
+          recall: 71,
+          confidence: 71,
+        },
       ];
 
       const trends = scorer.getQualityTrends(history);

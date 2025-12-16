@@ -72,7 +72,9 @@ export class ReviewQualityScorer {
     // Calculate precision (if we have feedback)
     let precision = 0;
     if (feedback && feedback.size > 0) {
-      const truePositives = Array.from(feedback.values()).filter((f) => f.accepted && f.fixed).length;
+      const truePositives = Array.from(feedback.values()).filter(
+        (f) => f.accepted && f.fixed
+      ).length;
       const falsePositives = Array.from(feedback.values()).filter((f) => !f.accepted).length;
       const totalPositives = truePositives + falsePositives;
       precision = totalPositives > 0 ? (truePositives / totalPositives) * 100 : 0;
@@ -81,9 +83,13 @@ export class ReviewQualityScorer {
     // Calculate recall (requires knowing total issues - approximated)
     let recall = 0;
     if (feedback && feedback.size > 0) {
-      const truePositives = Array.from(feedback.values()).filter((f) => f.accepted && f.fixed).length;
+      const truePositives = Array.from(feedback.values()).filter(
+        (f) => f.accepted && f.fixed
+      ).length;
       // Estimate false negatives as dismissed comments that were later fixed
-      const falseNegatives = Array.from(feedback.values()).filter((f) => !f.accepted && f.fixed).length;
+      const falseNegatives = Array.from(feedback.values()).filter(
+        (f) => !f.accepted && f.fixed
+      ).length;
       const totalActualIssues = truePositives + falseNegatives;
       recall = totalActualIssues > 0 ? (truePositives / totalActualIssues) * 100 : 0;
     }
@@ -179,11 +185,11 @@ export class ReviewQualityScorer {
     // Weights for different metrics
     const weights = {
       accuracy: 0.25, // 25% - Most important
-      actionability: 0.20, // 20% - High value
-      precision: 0.20, // 20% - Important for trust
+      actionability: 0.2, // 20% - High value
+      precision: 0.2, // 20% - Important for trust
       recall: 0.15, // 15% - Important but less critical
-      coverage: 0.10, // 10% - Good to have
-      confidence: 0.10, // 10% - Supporting metric
+      coverage: 0.1, // 10% - Good to have
+      confidence: 0.1, // 10% - Supporting metric
     };
 
     const weightedSum =

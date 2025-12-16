@@ -196,10 +196,7 @@ describe('CommentPrioritizer', () => {
 
       // Verify all comments are categorized
       const totalGrouped =
-        groups.critical.length +
-        groups.high.length +
-        groups.medium.length +
-        groups.low.length;
+        groups.critical.length + groups.high.length + groups.medium.length + groups.low.length;
       expect(totalGrouped).toBe(comments.length);
     });
   });
