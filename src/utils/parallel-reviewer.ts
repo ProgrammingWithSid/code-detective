@@ -51,16 +51,14 @@ export class ParallelReviewer {
 
       // Emit batch completion for streaming
       if (stream) {
-        // TypeScript guard: stream is defined here
-        const streamInstance: ReviewStream = stream as ReviewStream;
         for (let j = 0; j < batchResults.length; j++) {
           const batchIndex = i + j;
           const batchResult = batchResults[j];
           if (batchResult) {
             const batchComments = batchResult.comments;
-            streamInstance.batchComplete(batchIndex, batchComments, batches.length);
+            stream.batchComplete(batchIndex, batchComments, batches.length);
             // Emit individual comments
-            batchComments.forEach((comment) => streamInstance.emitComment(comment));
+            batchComments.forEach((comment) => stream.emitComment(comment));
           }
         }
       }

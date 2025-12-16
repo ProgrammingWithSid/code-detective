@@ -7,7 +7,6 @@ import {
   ChangedFile,
   CodeChunk,
   Config,
-  IncrementalReviewConfig,
   LineRange,
   ReviewComment,
   ReviewResult,
