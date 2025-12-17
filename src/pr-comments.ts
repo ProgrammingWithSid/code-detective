@@ -75,18 +75,28 @@ export class GitHubCommentService implements PRCommentService {
 
   async postComments(comments: ReviewComment[], prNumber: number): Promise<void> {
     if (comments.length === 0) {
+      console.log('No comments to post');
       return;
     }
 
+    console.log(`\n📝 Processing ${comments.length} comment(s) for PR #${prNumber}`);
+
     // Get PR files to determine diff ranges
     const prFiles = await this.getPRFiles(prNumber);
+    console.log(`Found ${prFiles.length} file(s) in PR`);
     const prFilesMap = new Map(prFiles.map((f) => [f.filename, f]));
 
     // Get PR HEAD commit SHA (needed for inline comments)
     const prHeadSHA = await this.getPRHeadSHA(prNumber);
+    console.log(`PR HEAD SHA: ${prHeadSHA}`);
 
     // Categorize comments
     const categorized = this.categorizeComments(comments, prFilesMap);
+    console.log(`\n📊 Comment categorization:`);
+    console.log(`  - Actionable (inline): ${categorized.actionable.length}`);
+    console.log(`  - Outside diff: ${categorized.outsideDiff.length}`);
+    console.log(`  - Nitpicks: ${categorized.nitpicks.length}`);
+    console.log(`  - Cautions: ${categorized.cautions.length}`);
 
     // Post inline comments for actionable comments within diff range
     await this.postInlineComments(categorized.actionable, prNumber, prFilesMap, prHeadSHA);
@@ -330,10 +340,12 @@ export class GitHubCommentService implements PRCommentService {
     prHeadSHA: string
   ): Promise<void> {
     if (comments.length === 0) {
+      console.log('No actionable comments to post inline');
       return;
     }
 
     const commentsByFile = this.groupCommentsByFile(comments);
+    console.log(`Posting inline comments for ${commentsByFile.size} file(s)`);
 
     for (const [file, fileComments] of commentsByFile.entries()) {
       const prFile = prFilesMap.get(file);
@@ -342,15 +354,20 @@ export class GitHubCommentService implements PRCommentService {
         continue;
       }
 
-      const reviewComments = this.formatReviewComments(fileComments);
+      console.log(`Formatting ${fileComments.length} comment(s) for ${file}`);
+      const reviewComments = this.formatReviewComments(fileComments, prFile);
+      console.log(`Formatted ${reviewComments.length} review comment(s) for ${file}`);
 
       if (reviewComments.length === 0) {
         console.warn(`No valid inline comments for ${file} after formatting`);
         continue;
       }
 
+      // Log the comments being posted for debugging
+      console.log(`Posting comments to lines: ${reviewComments.map((c) => c.line).join(', ')}`);
+
       try {
-        await this.octokit.pulls.createReview({
+        const response = await this.octokit.pulls.createReview({
           owner: this.owner,
           repo: this.repo,
           pull_number: prNumber,
@@ -359,14 +376,22 @@ export class GitHubCommentService implements PRCommentService {
           event: 'COMMENT',
           comments: reviewComments,
         });
-        console.log(`Posted ${reviewComments.length} inline comment(s) for ${file}`);
+        console.log(
+          `✅ Successfully posted ${reviewComments.length} inline comment(s) for ${file}`
+        );
+        console.log(`Review ID: ${response.data.id}`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`Failed to post inline comments for ${file}: ${errorMessage}`);
+        console.error(`❌ Failed to post inline comments for ${file}: ${errorMessage}`);
         // Log the error details for debugging
         if (error instanceof Error && 'status' in error) {
           console.error(`Error status: ${(error as { status?: number }).status}`);
         }
+        if (error instanceof Error && 'response' in error) {
+          const response = (error as { response?: { data?: unknown } }).response;
+          console.error(`Error response:`, JSON.stringify(response?.data, null, 2));
+        }
+        // Don't throw - continue with other files
       }
     }
   }
@@ -449,14 +474,84 @@ export class GitHubCommentService implements PRCommentService {
     return text;
   }
 
-  private formatReviewComments(comments: ReviewComment[]): GitHubReviewComment[] {
-    // GitHub API expects line numbers in the new file version (not diff line numbers)
-    // The comment.line already represents the line number in the file
-    return comments.map((comment) => ({
-      path: comment.file,
-      line: comment.line, // Line number in the new file version
-      body: this.formatComment(comment),
-    }));
+  private formatReviewComments(
+    comments: ReviewComment[],
+    prFile?: GitHubPRFile
+  ): GitHubReviewComment[] {
+    if (!prFile || !prFile.patch) {
+      console.warn('No patch data available, cannot format review comments');
+      return [];
+    }
+
+    // Map comment lines to actual diff line numbers
+    const validComments: GitHubReviewComment[] = [];
+
+    for (const comment of comments) {
+      const mappedLine = this.mapCommentLineToDiffLine(comment.line, prFile);
+      if (mappedLine !== null) {
+        validComments.push({
+          path: comment.file,
+          line: mappedLine, // Line number in the new file version within diff
+          body: this.formatComment(comment),
+        });
+      } else {
+        console.warn(
+          `Comment on line ${comment.line} for ${comment.file} could not be mapped to diff line`
+        );
+      }
+    }
+
+    return validComments;
+  }
+
+  /**
+   * Map a comment line number to the correct line number in the PR diff
+   * Returns null if the line is not in the diff or is a deleted line
+   */
+  private mapCommentLineToDiffLine(lineNumber: number, prFile: GitHubPRFile): number | null {
+    if (!prFile.patch) {
+      return null;
+    }
+    const patchLines = prFile.patch.split('\n');
+    let currentNewLine = 0;
+
+    for (const line of patchLines) {
+      // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
+      if (line.startsWith('@@')) {
+        const match = line.match(/@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,(\d+))?/);
+        if (match?.[1]) {
+          currentNewLine = parseInt(match[1], 10);
+        }
+        continue;
+      }
+
+      // Skip diff metadata lines
+      if (line.startsWith('---') || line.startsWith('+++')) {
+        continue;
+      }
+
+      // Added line in new file - can comment on this
+      if (line.startsWith('+')) {
+        if (currentNewLine === lineNumber) {
+          return currentNewLine;
+        }
+        currentNewLine++;
+      }
+      // Context line (unchanged) - can comment on this if it matches
+      else if (line.startsWith(' ')) {
+        if (currentNewLine === lineNumber) {
+          return currentNewLine;
+        }
+        currentNewLine++;
+      }
+      // Deleted line - cannot comment on deleted lines
+      else if (line.startsWith('-')) {
+        // Don't increment currentNewLine for deleted lines
+        continue;
+      }
+    }
+
+    return null; // Line not found in diff
   }
 
   private formatComment(comment: ReviewComment): string {
