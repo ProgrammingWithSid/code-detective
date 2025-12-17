@@ -34,7 +34,14 @@ export class RuleBasedFilter {
       // Analyze each line
       lines.forEach((line, index) => {
         const lineNumber = chunk.startLine + index;
-        const detectedIssues = this.detectIssuesInLine(line, filePath, lineNumber, chunk);
+        const detectedIssues = this.detectIssuesInLine(
+          line,
+          filePath,
+          lineNumber,
+          chunk,
+          lines,
+          index
+        );
         issues.push(...detectedIssues);
       });
     }
@@ -49,7 +56,9 @@ export class RuleBasedFilter {
     line: string,
     filePath: string,
     lineNumber: number,
-    chunk: CodeChunk
+    chunk: CodeChunk,
+    lines: string[],
+    index: number
   ): RuleBasedIssue[] {
     const issues: RuleBasedIssue[] = [];
     const trimmedLine = line.trim();
@@ -214,6 +223,46 @@ export class RuleBasedFilter {
       });
     }
 
+    // Rule 13: ESLint disable comments without reason
+    // Match: // eslint-disable, // eslint-disable-next-line, // eslint-disable-line
+    // Also match: /* eslint-disable */, /* eslint-disable-next-line */, etc.
+    const eslintDisablePattern =
+      /(?:^|\s)(?:\/\/|\/\*)\s*eslint-disable(?:-next-line|-line)?(?:\s+[\w-,\s]+)?(?:\s*\*\/)?/i;
+    if (this.matchesPattern(trimmedLine, eslintDisablePattern)) {
+      // Check if there's a reason comment (after -- or in a separate comment)
+      // Reason can be: -- reason text, or /* reason */, or // reason on same/next line
+      const hasReasonInLine =
+        (trimmedLine.includes('--') && trimmedLine.match(/--\s+.+/)) ||
+        (trimmedLine.match(/\/\*\s*.+\s*\*\//) &&
+          !trimmedLine.match(/\/\*\s*eslint-disable.*\*\//));
+
+      // Check if next line has an explanation comment
+      const nextLine: string = index < lines.length - 1 ? (lines[index + 1]?.trim() ?? '') : '';
+      const hasReasonInNextLine =
+        nextLine.length > 0 &&
+        (nextLine.startsWith('//') || nextLine.startsWith('/*')) &&
+        !nextLine.match(/eslint-disable/i) &&
+        nextLine.length > 3; // More than just "//" or "/* */"
+
+      if (!hasReasonInLine && !hasReasonInNextLine) {
+        // Extract the rule name(s) if present (can be multiple rules separated by commas)
+        const ruleMatch = trimmedLine.match(
+          /eslint-disable(?:-next-line|-line)?(?:\s+([\w-,\s]+))?/i
+        );
+        const ruleName = ruleMatch?.[1]?.trim() || 'rule';
+
+        issues.push({
+          file: filePath,
+          line: lineNumber,
+          severity: 'suggestion',
+          category: 'code_quality',
+          message: `ESLint disable comment found without explanation. Add a reason comment (using --) explaining why the lint rule is disabled.`,
+          rule: 'eslint-disable-without-reason',
+          fix: this.generateEslintDisableFix(trimmedLine, ruleName),
+        });
+      }
+    }
+
     return issues;
   }
 
@@ -222,6 +271,33 @@ export class RuleBasedFilter {
    */
   private matchesPattern(line: string, pattern: RegExp): boolean {
     return pattern.test(line);
+  }
+
+  /**
+   * Generate fix for ESLint disable comment without reason
+   */
+  private generateEslintDisableFix(line: string, ruleName: string): string {
+    // Determine if it's a single-line or multi-line comment
+    const isMultiLine = line.includes('/*');
+    const isNextLine = line.includes('next-line');
+    const isLine = line.includes('-line') && !line.includes('next-line');
+
+    // Extract the rule name(s) from the original line
+    const ruleMatch = line.match(/eslint-disable(?:-next-line|-line)?(?:\s+([\w-,\s]+))?/i);
+    const actualRuleName = ruleMatch?.[1]?.trim() || ruleName;
+
+    // Preserve the original comment style
+    if (isMultiLine) {
+      // Multi-line comment: /* eslint-disable-next-line rule-name */
+      const prefix = `/* eslint-disable${isNextLine ? '-next-line' : isLine ? '-line' : ''}`;
+      const suffix = actualRuleName ? ` ${actualRuleName}` : '';
+      return `${prefix}${suffix} -- Add reason explaining why this rule is disabled */`;
+    } else {
+      // Single-line comment: // eslint-disable-next-line rule-name
+      const prefix = `// eslint-disable${isNextLine ? '-next-line' : isLine ? '-line' : ''}`;
+      const suffix = actualRuleName ? ` ${actualRuleName}` : '';
+      return `${prefix}${suffix} -- Add reason explaining why this rule is disabled`;
+    }
   }
 
   /**

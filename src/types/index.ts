@@ -171,6 +171,21 @@ export interface ReviewResultJSON {
     message: string;
     fix: string | null;
   }>;
+  namingSuggestions?: Array<{
+    file: string;
+    line: number;
+    currentName: string;
+    suggestedName: string;
+    type: string;
+    reason: string;
+    severity: Severity;
+  }>;
+  prTitleSuggestion?: {
+    currentTitle?: string;
+    suggestedTitle: string;
+    reason: string;
+    alternatives?: string[];
+  };
 }
 
 export interface ReviewQualityMetrics {
@@ -183,6 +198,23 @@ export interface ReviewQualityMetrics {
   confidence: number;
 }
 
+export interface NamingSuggestion {
+  file: string;
+  line: number;
+  currentName: string;
+  suggestedName: string;
+  type: 'function' | 'variable' | 'class' | 'interface' | 'constant';
+  reason: string;
+  severity: Severity;
+}
+
+export interface PRTitleSuggestion {
+  currentTitle?: string;
+  suggestedTitle: string;
+  reason: string;
+  alternatives?: string[];
+}
+
 export interface ReviewResult {
   comments: ReviewComment[];
   summary: string;
@@ -191,6 +223,8 @@ export interface ReviewResult {
   topIssues?: string[];
   metadata?: ReviewMetadata;
   qualityMetrics?: ReviewQualityMetrics;
+  namingSuggestions?: NamingSuggestion[];
+  prTitleSuggestion?: PRTitleSuggestion;
 }
 
 // ============================================================================

@@ -17,6 +17,8 @@ import {
 import { ChunkBatcher } from './utils/chunk-batcher';
 import { CommentDeduplicator } from './utils/comment-deduplicator';
 import { CommentPrioritizer } from './utils/comment-prioritizer';
+import { NamingAnalyzer } from './utils/naming-analyzer';
+import { PRTitleAnalyzer } from './utils/pr-title-analyzer';
 import { ParallelReviewer } from './utils/parallel-reviewer';
 import { ReviewCache } from './utils/review-cache';
 import { ReviewQualityScorer } from './utils/review-quality';
@@ -65,6 +67,23 @@ export function reviewResultToJSON(
       message: c.body,
       fix: c.fix || null,
     })),
+    namingSuggestions: result.namingSuggestions?.map((n) => ({
+      file: n.file,
+      line: n.line,
+      currentName: n.currentName,
+      suggestedName: n.suggestedName,
+      type: n.type,
+      reason: n.reason,
+      severity: n.severity,
+    })),
+    prTitleSuggestion: result.prTitleSuggestion
+      ? {
+          currentTitle: result.prTitleSuggestion.currentTitle,
+          suggestedTitle: result.prTitleSuggestion.suggestedTitle,
+          reason: result.prTitleSuggestion.reason,
+          alternatives: result.prTitleSuggestion.alternatives,
+        }
+      : undefined,
   };
 }
 
@@ -104,6 +123,8 @@ export class PRReviewer {
   private commentPrioritizer: CommentPrioritizer;
   private reviewQualityScorer: ReviewQualityScorer;
   private reviewTracker?: ReviewTracker;
+  private namingAnalyzer: NamingAnalyzer;
+  private prTitleAnalyzer: PRTitleAnalyzer;
 
   constructor(config: Config, repoPath?: string) {
     this.config = config;
@@ -149,6 +170,18 @@ export class PRReviewer {
       const maxHistorySize = Number(incrementalReview.maxHistorySize || 10000);
       this.reviewTracker = new ReviewTracker(storagePath, maxHistorySize);
     }
+
+    // Initialize naming analyzer
+    this.namingAnalyzer = new NamingAnalyzer({
+      aiProvider: this.aiProvider,
+      enabled: true,
+    });
+
+    // Initialize PR title analyzer
+    this.prTitleAnalyzer = new PRTitleAnalyzer({
+      aiProvider: this.aiProvider,
+      enabled: true,
+    });
   }
 
   /**
@@ -368,14 +401,30 @@ export class PRReviewer {
       chunks
     );
 
-    // Step 7: Post comments to PR
+    // Step 7: Analyze naming and PR title
+    console.log(chalk.blue(`\n📝 Analyzing naming conventions and PR title...`));
+
+    const [namingSuggestions, prTitleSuggestion] = await Promise.all([
+      this.namingAnalyzer.analyzeNaming(chunks),
+      this.prTitleAnalyzer.analyzePRTitle(undefined, changedFiles, chunks),
+    ]);
+
+    if (namingSuggestions.length > 0) {
+      console.log(chalk.green(`Found ${namingSuggestions.length} naming suggestion(s)`));
+    }
+
+    if (prTitleSuggestion) {
+      console.log(chalk.green(`PR title suggestion: ${prTitleSuggestion.suggestedTitle}`));
+    }
+
+    // Step 8: Post comments to PR
     const postCommentsPromise: Promise<void> = this.postCommentsIfEnabled(
       postComments,
       filteredResult
     );
     await postCommentsPromise;
 
-    // Step 8: Mark chunks as reviewed (for incremental reviews)
+    // Step 9: Mark chunks as reviewed (for incremental reviews)
     if (this.reviewTracker && chunksToReview.length > 0) {
       const commentsForTracking = filteredResult.comments.map((c) => ({
         file: c.file,
@@ -390,7 +439,14 @@ export class PRReviewer {
       );
     }
 
-    return filteredResult;
+    // Add suggestions to result
+    const finalResult: ReviewResult = {
+      ...filteredResult,
+      namingSuggestions: namingSuggestions.length > 0 ? namingSuggestions : undefined,
+      prTitleSuggestion: prTitleSuggestion || undefined,
+    };
+
+    return finalResult;
   }
 
   /**

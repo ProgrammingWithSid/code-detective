@@ -55,8 +55,30 @@ export class ChunkService {
   async chunkChangedFiles(changedFiles: ChangedFile[], branch: string): Promise<CodeChunk[]> {
     const chunks: CodeChunk[] = [];
 
+    // Documentation file patterns to exclude from review
+    const docFilePatterns = [
+      /\.md$/i,
+      /\.mdx$/i,
+      /\.txt$/i,
+      /^README/i,
+      /^CHANGELOG/i,
+      /^LICENSE/i,
+      /^CONTRIBUTING/i,
+      /^\.gitignore$/i,
+      /^\.gitattributes$/i,
+      /docs\//i,
+      /^\.github\//i,
+      /^\.vscode\//i,
+      /^\.idea\//i,
+    ];
+
     for (const file of changedFiles) {
       if (file.status === 'deleted') continue;
+
+      // Skip documentation and config files
+      if (docFilePatterns.some((pattern) => pattern.test(file.path))) {
+        continue;
+      }
 
       try {
         const fileChunks = await this.chunkFile(file.path, branch);

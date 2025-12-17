@@ -156,16 +156,18 @@ export class GitHubCommentService implements PRCommentService {
       const isInDiff = this.isCommentInDiff(comment, prFile);
 
       if (isInDiff) {
+        // Only comments inside diff are posted inline
         actionable.push(comment);
       } else {
+        // Comments outside diff go to summary sections
         outsideDiff.push(comment);
-      }
 
-      // Categorize by severity
-      if (comment.severity === 'error' || comment.severity === 'warning') {
-        cautions.push(comment);
-      } else {
-        nitpicks.push(comment);
+        // Categorize outside diff comments by severity
+        if (comment.severity === 'info' || comment.severity === 'suggestion') {
+          nitpicks.push(comment);
+        } else if (comment.severity === 'error' || comment.severity === 'warning') {
+          cautions.push(comment);
+        }
       }
     }
 
@@ -250,8 +252,8 @@ export class GitHubCommentService implements PRCommentService {
 
     let body = `**Actionable comments posted: ${actionableCount}**\n\n`;
 
-    // Caution section for errors/warnings
-    if (categorized.cautions.length > 0) {
+    // Caution section - only show if there are comments outside diff
+    if (outsideDiffCount > 0) {
       body += `> ⚠️ **Caution**\n`;
       body += `> Some comments are outside the diff and can't be posted inline due to platform limitations.\n\n`;
     }
@@ -264,10 +266,10 @@ export class GitHubCommentService implements PRCommentService {
       body += `</details>\n\n`;
     }
 
-    // Nitpick comments
+    // Nitpick comments (only those outside diff)
     if (nitpickCount > 0) {
       body += `<details>\n`;
-      body += `<summary>✏️ Nitpick comments (${nitpickCount})</summary>\n\n`;
+      body += `<summary>🧹 Nitpick comments (${nitpickCount})</summary>\n\n`;
       body += this.formatCommentsList(categorized.nitpicks);
       body += `</details>\n\n`;
     }
