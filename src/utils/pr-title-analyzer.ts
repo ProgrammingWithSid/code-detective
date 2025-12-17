@@ -45,6 +45,8 @@ export class PRTitleAnalyzer {
         startLine: 1,
         endLine: changeSummary.split('\n').length,
         content: changeSummary,
+        extension: '.md',
+        language: 'markdown',
       };
 
       // Create prompt for AI with detailed requirements

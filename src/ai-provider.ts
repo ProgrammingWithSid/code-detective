@@ -185,10 +185,21 @@ abstract class BaseAIProvider implements AIProviderInterface {
       prompt += `### Chunk ${index + 1}: ${chunk.name} (${chunk.type})\n`;
       prompt += `**File:** ${chunk.file}\n`;
       prompt += `**Lines:** ${chunk.startLine}-${chunk.endLine}\n`;
+
+      // Include language and extension information from chunkyyy
+      if (chunk.language) {
+        prompt += `**Language:** ${chunk.language}\n`;
+      }
+      if (chunk.extension) {
+        prompt += `**File Extension:** ${chunk.extension}\n`;
+      }
+
       if (chunk.dependencies && chunk.dependencies.length > 0) {
         prompt += `**Dependencies:** ${chunk.dependencies.join(', ')}\n`;
       }
-      const lang = this.getLanguageFromFile(chunk.file);
+
+      // Use language from chunk if available, otherwise fallback to file-based detection
+      const lang = chunk.language || this.getLanguageFromFile(chunk.file);
       prompt += `\n\`\`\`${lang}\n${chunk.content}\n\`\`\`\n\n`;
     });
 

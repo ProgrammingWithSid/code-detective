@@ -105,12 +105,17 @@ export interface CodeChunk {
   content: string;
   hash?: string;
   dependencies?: string[];
+  /** File extension (e.g., '.ts', '.py', '.vue') */
+  extension?: string;
+  /** Detected programming language (e.g., 'typescript', 'python', 'vue') */
+  language?: string;
 }
 
 export interface ChunkyyyChunk {
   id?: string;
   name?: string;
   type?: string;
+  filePath?: string; // File path from chunkyyy chunk
   startLine?: number;
   endLine?: number;
   hash?: string;

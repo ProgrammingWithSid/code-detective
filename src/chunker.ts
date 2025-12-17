@@ -1,5 +1,6 @@
 import { Chunkyyy } from 'chunkyyy';
 import { existsSync, readFileSync } from 'fs';
+import { extname } from 'path';
 import { join } from 'path';
 import { GitService } from './git';
 import { ChangedFile, ChunkyyyChunk, CodeChunk, CodeSherlockError, FileLanguageMap } from './types';
@@ -30,6 +31,33 @@ const FILE_TYPE_MAP: FileLanguageMap = {
   yaml: 'yaml',
   yml: 'yaml',
   md: 'markdown',
+};
+
+/**
+ * Language detection map (aligned with chunkyyy's language detection)
+ */
+const LANGUAGE_MAP: Record<string, string> = {
+  '.ts': 'typescript',
+  '.tsx': 'typescript',
+  '.js': 'javascript',
+  '.jsx': 'javascript',
+  '.mjs': 'javascript',
+  '.cjs': 'javascript',
+  '.vue': 'vue',
+  '.py': 'python',
+  '.java': 'java',
+  '.go': 'go',
+  '.rs': 'rust',
+  '.cpp': 'cpp',
+  '.cc': 'cpp',
+  '.cxx': 'cpp',
+  '.c': 'c',
+  '.h': 'c',
+  '.hpp': 'cpp',
+  '.rb': 'ruby',
+  '.php': 'php',
+  '.kt': 'kotlin',
+  '.swift': 'swift',
 };
 
 // ============================================================================
@@ -131,6 +159,10 @@ export class ChunkService {
     const lines = content.split('\n');
     const chunkContent = lines.slice(startLine - 1, endLine).join('\n');
 
+    // Extract extension and language from file path (aligned with chunkyyy)
+    const extension = extname(filePath).toLowerCase();
+    const language = LANGUAGE_MAP[extension] || 'typescript';
+
     return {
       id: `${filePath}:${startLine}-${endLine}`,
       name: `Range ${startLine}-${endLine}`,
@@ -139,6 +171,8 @@ export class ChunkService {
       startLine,
       endLine,
       content: chunkContent,
+      extension,
+      language,
     };
   }
 
@@ -177,6 +211,10 @@ export class ChunkService {
     const lines = content.split('\n');
     console.log(`Using fallback chunking for ${filePath} (${lines.length} lines)`);
 
+    // Extract extension and language from file path (aligned with chunkyyy)
+    const extension = extname(filePath).toLowerCase();
+    const language = LANGUAGE_MAP[extension] || 'typescript';
+
     return [
       {
         id: `${filePath}:1-${lines.length}`,
@@ -186,6 +224,8 @@ export class ChunkService {
         startLine: 1,
         endLine: lines.length,
         content: content,
+        extension,
+        language,
       },
     ];
   }
@@ -199,6 +239,13 @@ export class ChunkService {
       const startLine = chunk.startLine ?? chunk.range?.start?.line ?? 1;
       const endLine = chunk.endLine ?? chunk.range?.end?.line ?? 1;
 
+      // Use filePath from chunk if available (from chunkyyy), otherwise use parameter
+      const chunkFilePath = chunk.filePath || filePath;
+
+      // Extract extension and language from file path (using chunkyyy's filePath when available)
+      const extension = extname(chunkFilePath).toLowerCase();
+      const language = LANGUAGE_MAP[extension] || 'typescript';
+
       // Map dependencies to string array (handle various formats from chunkyyy)
       const dependencies = chunk.dependencies?.map((dep) => {
         if (typeof dep === 'string') return dep;
@@ -209,15 +256,17 @@ export class ChunkService {
       });
 
       return {
-        id: chunk.id ?? `${filePath}:${startLine}-${endLine}`,
+        id: chunk.id ?? `${chunkFilePath}:${startLine}-${endLine}`,
         name: chunk.name ?? 'unnamed',
         type: chunk.type ?? 'unknown',
-        file: filePath,
+        file: chunkFilePath,
         startLine,
         endLine,
         content: this.extractContentRange(content, startLine, endLine),
         hash: chunk.hash,
         dependencies,
+        extension,
+        language,
       };
     });
   }
