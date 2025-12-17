@@ -103,6 +103,7 @@ describe('PRReviewer with Caching', () => {
     mockPRCommentService = {
       postComments: jest.fn().mockResolvedValue(undefined),
       postReviewSummary: jest.fn().mockResolvedValue(undefined),
+      postSuggestions: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<PRCommentService>;
 
     const config = createMockConfig();

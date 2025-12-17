@@ -417,10 +417,17 @@ export class PRReviewer {
       console.log(chalk.green(`PR title suggestion: ${prTitleSuggestion.suggestedTitle}`));
     }
 
+    // Add suggestions to result
+    const finalResult: ReviewResult = {
+      ...filteredResult,
+      namingSuggestions: namingSuggestions.length > 0 ? namingSuggestions : undefined,
+      prTitleSuggestion: prTitleSuggestion || undefined,
+    };
+
     // Step 8: Post comments to PR
     const postCommentsPromise: Promise<void> = this.postCommentsIfEnabled(
       postComments,
-      filteredResult
+      finalResult
     );
     await postCommentsPromise;
 
@@ -438,13 +445,6 @@ export class PRReviewer {
         baseBranch
       );
     }
-
-    // Add suggestions to result
-    const finalResult: ReviewResult = {
-      ...filteredResult,
-      namingSuggestions: namingSuggestions.length > 0 ? namingSuggestions : undefined,
-      prTitleSuggestion: prTitleSuggestion || undefined,
-    };
 
     return finalResult;
   }
@@ -790,6 +790,12 @@ export class PRReviewer {
 
     await this.prCommentService.postReviewSummary(result, prNumber);
     console.log(chalk.green('Posted review summary'));
+
+    // Post suggestions (PR title and naming)
+    await this.prCommentService.postSuggestions(result, prNumber);
+    if (result.namingSuggestions?.length || result.prTitleSuggestion) {
+      console.log(chalk.green('Posted suggestions'));
+    }
   }
 
   /**

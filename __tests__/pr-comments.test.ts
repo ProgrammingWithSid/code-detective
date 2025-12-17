@@ -36,6 +36,7 @@ describe('PRCommentService', () => {
       pulls: {
         listFiles: jest.Mock;
         createReview: jest.Mock;
+        get: jest.Mock;
       };
       issues: {
         createComment: jest.Mock;
@@ -52,6 +53,7 @@ describe('PRCommentService', () => {
         pulls: {
           listFiles: jest.fn().mockResolvedValue({ data: [] }),
           createReview: jest.fn().mockResolvedValue({}),
+          get: jest.fn().mockResolvedValue({ data: { head: { sha: 'test-head-sha' } } }),
         },
         issues: {
           createComment: jest.fn().mockResolvedValue({}),
@@ -104,13 +106,18 @@ describe('PRCommentService', () => {
       await service.postComments(comments, 123);
 
       // Should post inline comments for actionable comments (2 files)
+      expect(mockOctokit.pulls.get).toHaveBeenCalledWith({
+        owner: 'test-org',
+        repo: 'test-repo',
+        pull_number: 123,
+      });
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(2);
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           owner: 'test-org',
           repo: 'test-repo',
           pull_number: 123,
-          commit_id: 'sha1',
+          commit_id: 'test-head-sha',
           event: 'COMMENT',
         })
       );

@@ -26,6 +26,7 @@ const SEVERITY_EMOJI: Record<Severity, string> = {
 export interface PRCommentService {
   postComments(comments: ReviewComment[], prNumber: number): Promise<void>;
   postReviewSummary(summary: ReviewResult, prNumber: number): Promise<void>;
+  postSuggestions(result: ReviewResult, prNumber: number): Promise<void>;
 }
 
 interface GitHubPRFile {
@@ -81,11 +82,14 @@ export class GitHubCommentService implements PRCommentService {
     const prFiles = await this.getPRFiles(prNumber);
     const prFilesMap = new Map(prFiles.map((f) => [f.filename, f]));
 
+    // Get PR HEAD commit SHA (needed for inline comments)
+    const prHeadSHA = await this.getPRHeadSHA(prNumber);
+
     // Categorize comments
     const categorized = this.categorizeComments(comments, prFilesMap);
 
     // Post inline comments for actionable comments within diff range
-    await this.postInlineComments(categorized.actionable, prNumber, prFilesMap);
+    await this.postInlineComments(categorized.actionable, prNumber, prFilesMap, prHeadSHA);
 
     // Post summary comment with categorized sections
     await this.postSummaryComment(categorized, prNumber);
@@ -104,6 +108,86 @@ export class GitHubCommentService implements PRCommentService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`Failed to post review summary: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Post suggestions (PR title and naming) as a separate comment
+   */
+  async postSuggestions(result: ReviewResult, prNumber: number): Promise<void> {
+    const hasSuggestions =
+      (result.namingSuggestions && result.namingSuggestions.length > 0) || result.prTitleSuggestion;
+
+    if (!hasSuggestions) {
+      return;
+    }
+
+    let body = '## 💡 Suggestions\n\n';
+
+    // PR Title Suggestion
+    if (result.prTitleSuggestion) {
+      body += `### 📝 PR Title Suggestion\n\n`;
+      if (result.prTitleSuggestion.currentTitle) {
+        body += `**Current title:** ${result.prTitleSuggestion.currentTitle}\n\n`;
+      }
+      body += `**Suggested title:** \`${result.prTitleSuggestion.suggestedTitle}\`\n\n`;
+      body += `**Reason:** ${result.prTitleSuggestion.reason}\n\n`;
+
+      if (
+        result.prTitleSuggestion.alternatives &&
+        result.prTitleSuggestion.alternatives.length > 0
+      ) {
+        body += `**Alternatives:**\n`;
+        for (const alt of result.prTitleSuggestion.alternatives) {
+          body += `- \`${alt}\`\n`;
+        }
+        body += '\n';
+      }
+    }
+
+    // Naming Suggestions
+    if (result.namingSuggestions && result.namingSuggestions.length > 0) {
+      body += `### 🏷️ Naming Suggestions (${result.namingSuggestions.length})\n\n`;
+
+      const suggestionsByFile = new Map<string, typeof result.namingSuggestions>();
+      for (const suggestion of result.namingSuggestions) {
+        const existing = suggestionsByFile.get(suggestion.file) || [];
+        existing.push(suggestion);
+        suggestionsByFile.set(suggestion.file, existing);
+      }
+
+      for (const [file, fileSuggestions] of suggestionsByFile.entries()) {
+        body += `**\`${file}\`**\n\n`;
+        for (const suggestion of fileSuggestions) {
+          const typeEmoji =
+            suggestion.type === 'function'
+              ? '🔧'
+              : suggestion.type === 'class'
+                ? '🏛️'
+                : suggestion.type === 'variable'
+                  ? '📦'
+                  : suggestion.type === 'constant'
+                    ? '🔒'
+                    : '📝';
+
+          body += `- ${typeEmoji} **Line ${suggestion.line}:** `;
+          body += `\`${suggestion.currentName}\` → \`${suggestion.suggestedName}\` `;
+          body += `(${suggestion.type})\n`;
+          body += `  - *${suggestion.reason}*\n\n`;
+        }
+      }
+    }
+
+    try {
+      await this.octokit.issues.createComment({
+        owner: this.owner,
+        repo: this.repo,
+        issue_number: prNumber,
+        body,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to post suggestions: ${errorMessage}`);
     }
   }
 
@@ -140,6 +224,21 @@ export class GitHubCommentService implements PRCommentService {
         patch: f.patch ?? undefined,
       })
     );
+  }
+
+  private async getPRHeadSHA(prNumber: number): Promise<string> {
+    try {
+      const { data: pr } = await this.octokit.pulls.get({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: prNumber,
+      });
+      return pr.head.sha;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to get PR HEAD SHA: ${errorMessage}`);
+      throw new PRCommentError(`Failed to get PR HEAD SHA: ${errorMessage}`);
+    }
   }
 
   private categorizeComments(
@@ -179,30 +278,45 @@ export class GitHubCommentService implements PRCommentService {
       return false;
     }
 
-    // Parse patch to get line ranges
+    // Parse patch to get line ranges in the new file
     const patchLines = prFile.patch.split('\n');
-    let currentLine = 0;
+    let currentNewLine = 0;
 
     for (const line of patchLines) {
+      // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
       if (line.startsWith('@@')) {
         const match = line.match(/@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,(\d+))?/);
         if (match?.[1]) {
-          currentLine = parseInt(match[1], 10);
+          currentNewLine = parseInt(match[1], 10);
         }
         continue;
       }
 
-      if (line.startsWith('+') && !line.startsWith('+++')) {
-        if (currentLine === comment.line) {
+      // Skip diff metadata lines
+      if (line.startsWith('---') || line.startsWith('+++')) {
+        continue;
+      }
+
+      // Added line in new file
+      if (line.startsWith('+')) {
+        if (currentNewLine === comment.line) {
           return true;
         }
-        currentLine++;
-      } else if (line.startsWith(' ') || line.startsWith('-')) {
-        if (!line.startsWith('---') && !line.startsWith('+++')) {
-          if (line.startsWith(' ')) {
-            currentLine++;
-          }
+        currentNewLine++;
+      }
+      // Context line (unchanged) - also count towards new file line number
+      else if (line.startsWith(' ')) {
+        if (currentNewLine === comment.line) {
+          // Comment is on a context line - check if it's near changed lines
+          // For now, allow context lines as they can have comments too
+          return true;
         }
+        currentNewLine++;
+      }
+      // Deleted line (only affects old file, not new file)
+      else if (line.startsWith('-')) {
+        // Don't increment currentNewLine for deleted lines
+        continue;
       }
     }
 
@@ -212,7 +326,8 @@ export class GitHubCommentService implements PRCommentService {
   private async postInlineComments(
     comments: ReviewComment[],
     prNumber: number,
-    prFilesMap: Map<string, GitHubPRFile>
+    prFilesMap: Map<string, GitHubPRFile>,
+    prHeadSHA: string
   ): Promise<void> {
     if (comments.length === 0) {
       return;
@@ -223,24 +338,35 @@ export class GitHubCommentService implements PRCommentService {
     for (const [file, fileComments] of commentsByFile.entries()) {
       const prFile = prFilesMap.get(file);
       if (!prFile) {
+        console.warn(`File ${file} not found in PR files, skipping inline comments`);
         continue;
       }
 
       const reviewComments = this.formatReviewComments(fileComments);
+
+      if (reviewComments.length === 0) {
+        console.warn(`No valid inline comments for ${file} after formatting`);
+        continue;
+      }
 
       try {
         await this.octokit.pulls.createReview({
           owner: this.owner,
           repo: this.repo,
           pull_number: prNumber,
-          commit_id: prFile.sha,
-          body: '',
+          commit_id: prHeadSHA, // Use PR HEAD commit SHA, not file SHA
+          body: 'Code review by code-sherlock',
           event: 'COMMENT',
           comments: reviewComments,
         });
+        console.log(`Posted ${reviewComments.length} inline comment(s) for ${file}`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(`Failed to post inline comments for ${file}: ${errorMessage}`);
+        // Log the error details for debugging
+        if (error instanceof Error && 'status' in error) {
+          console.error(`Error status: ${(error as { status?: number }).status}`);
+        }
       }
     }
   }
@@ -324,9 +450,11 @@ export class GitHubCommentService implements PRCommentService {
   }
 
   private formatReviewComments(comments: ReviewComment[]): GitHubReviewComment[] {
+    // GitHub API expects line numbers in the new file version (not diff line numbers)
+    // The comment.line already represents the line number in the file
     return comments.map((comment) => ({
       path: comment.file,
-      line: comment.line,
+      line: comment.line, // Line number in the new file version
       body: this.formatComment(comment),
     }));
   }
@@ -416,6 +544,78 @@ export class GitLabCommentService implements PRCommentService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`Failed to post review summary: ${errorMessage}`);
+    }
+  }
+
+  async postSuggestions(result: ReviewResult, prNumber: number): Promise<void> {
+    const hasSuggestions =
+      (result.namingSuggestions && result.namingSuggestions.length > 0) || result.prTitleSuggestion;
+
+    if (!hasSuggestions) {
+      return;
+    }
+
+    let body = '## 💡 Suggestions\n\n';
+
+    // PR Title Suggestion
+    if (result.prTitleSuggestion) {
+      body += `### 📝 PR Title Suggestion\n\n`;
+      if (result.prTitleSuggestion.currentTitle) {
+        body += `**Current title:** ${result.prTitleSuggestion.currentTitle}\n\n`;
+      }
+      body += `**Suggested title:** \`${result.prTitleSuggestion.suggestedTitle}\`\n\n`;
+      body += `**Reason:** ${result.prTitleSuggestion.reason}\n\n`;
+
+      if (
+        result.prTitleSuggestion.alternatives &&
+        result.prTitleSuggestion.alternatives.length > 0
+      ) {
+        body += `**Alternatives:**\n`;
+        for (const alt of result.prTitleSuggestion.alternatives) {
+          body += `- \`${alt}\`\n`;
+        }
+        body += '\n';
+      }
+    }
+
+    // Naming Suggestions
+    if (result.namingSuggestions && result.namingSuggestions.length > 0) {
+      body += `### 🏷️ Naming Suggestions (${result.namingSuggestions.length})\n\n`;
+
+      const suggestionsByFile = new Map<string, typeof result.namingSuggestions>();
+      for (const suggestion of result.namingSuggestions) {
+        const existing = suggestionsByFile.get(suggestion.file) || [];
+        existing.push(suggestion);
+        suggestionsByFile.set(suggestion.file, existing);
+      }
+
+      for (const [file, fileSuggestions] of suggestionsByFile.entries()) {
+        body += `**\`${file}\`**\n\n`;
+        for (const suggestion of fileSuggestions) {
+          const typeEmoji =
+            suggestion.type === 'function'
+              ? '🔧'
+              : suggestion.type === 'class'
+                ? '🏛️'
+                : suggestion.type === 'variable'
+                  ? '📦'
+                  : suggestion.type === 'constant'
+                    ? '🔒'
+                    : '📝';
+
+          body += `- ${typeEmoji} **Line ${suggestion.line}:** `;
+          body += `\`${suggestion.currentName}\` → \`${suggestion.suggestedName}\` `;
+          body += `(${suggestion.type})\n`;
+          body += `  - *${suggestion.reason}*\n\n`;
+        }
+      }
+    }
+
+    try {
+      await this.postNote(prNumber, body);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to post suggestions: ${errorMessage}`);
     }
   }
 

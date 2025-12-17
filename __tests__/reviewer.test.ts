@@ -74,6 +74,7 @@ describe('PRReviewer', () => {
     mockPRCommentService = {
       postComments: jest.fn().mockResolvedValue(undefined),
       postReviewSummary: jest.fn().mockResolvedValue(undefined),
+      postSuggestions: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<PRCommentService>;
 
     (GitService as jest.MockedClass<typeof GitService>).mockImplementation(() => mockGitService);
