@@ -264,7 +264,7 @@ export class PRReviewer {
       console.log(chalk.blue(`\n🔗 Building dependency graph...`));
       try {
         const allFiles = changedFiles.map((f) => f.path);
-        await this.codegraphAnalyzer.buildGraph(allFiles);
+        this.codegraphAnalyzer.buildGraph(allFiles);
         impactAnalysis = this.codegraphAnalyzer.analyzeImpact(changedFiles);
         console.log(
           chalk.green(
@@ -282,9 +282,8 @@ export class PRReviewer {
           );
         }
       } catch (error) {
-        console.warn(
-          chalk.yellow(`⚠️  Codegraph analysis failed: ${error instanceof Error ? error.message : error}`)
-        );
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(chalk.yellow(`⚠️  Codegraph analysis failed: ${errorMessage}`));
       }
     }
 
@@ -334,7 +333,11 @@ export class PRReviewer {
 
     // Step 3.6: Run linters (if enabled)
     let linterComments: ReviewComment[] = [];
-    if (this.linterIntegration && this.config.linter?.tools && this.config.linter.tools.length > 0) {
+    if (
+      this.linterIntegration &&
+      this.config.linter?.tools &&
+      this.config.linter.tools.length > 0
+    ) {
       // Check tool availability
       const toolCheck = await ToolChecker.checkLinterTools(this.config.linter.tools);
       if (!toolCheck.allAvailable && toolCheck.missing.length > 0) {
@@ -375,9 +378,8 @@ export class PRReviewer {
           console.log(chalk.gray(`   Tools used: ${linterResult.toolsUsed.join(', ')}`));
         }
       } catch (error) {
-        console.warn(
-          chalk.yellow(`⚠️  Linter analysis failed: ${error instanceof Error ? error.message : error}`)
-        );
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(chalk.yellow(`⚠️  Linter analysis failed: ${errorMessage}`));
       }
     }
 
@@ -424,9 +426,8 @@ export class PRReviewer {
           console.log(chalk.gray(`   Tools used: ${sastResult.toolsUsed.join(', ')}`));
         }
       } catch (error) {
-        console.warn(
-          chalk.yellow(`⚠️  SAST analysis failed: ${error instanceof Error ? error.message : error}`)
-        );
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(chalk.yellow(`⚠️  SAST analysis failed: ${errorMessage}`));
       }
     }
 
@@ -605,7 +606,7 @@ export class PRReviewer {
 
     // Step 8.5: Post review decision (CodeRabbit-like feature)
     if (postComments && this.config.pr?.number) {
-      await this.postReviewDecision(finalResult);
+      await this.postReviewDecision(finalResult, this.config.pr.number);
     }
 
     // Step 9: Mark chunks as reviewed (for incremental reviews)
@@ -999,9 +1000,8 @@ export class PRReviewer {
       await this.prCommentService.postReviewDecision(result, prNumber, decision);
       console.log(chalk.green(`Posted review decision: ${decision}`));
     } catch (error) {
-      console.warn(
-        chalk.yellow(`Failed to post review decision: ${error instanceof Error ? error.message : error}`)
-      );
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.warn(chalk.yellow(`Failed to post review decision: ${errorMessage}`));
     }
   }
 

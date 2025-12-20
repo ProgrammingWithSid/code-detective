@@ -42,11 +42,7 @@ export {
   type SASTConfig,
 } from './sast-integration';
 
-export {
-  ToolChecker,
-  type ToolAvailability,
-  type ToolCheckResult,
-} from './tool-checker';
+export { ToolChecker, type ToolAvailability, type ToolCheckResult } from './tool-checker';
 
 export {
   CodegraphAnalyzer,

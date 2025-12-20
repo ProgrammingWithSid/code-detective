@@ -168,9 +168,46 @@ export class LinterIntegration {
     for (const tool of this.config.tools) {
       try {
         const issues = await this.runLinter(tool, filesToAnalyze);
-        if (issues.length > 0) {
-          allIssues.push(...issues);
+        // Check if tool analyzed relevant files
+        const hasRelevantFiles = filesToAnalyze.some((f) => {
+          // Check if tool is relevant for this file type
+          if (tool === 'jsonlint') return f.path.endsWith('.json');
+          if (tool === 'yamllint') return f.path.endsWith('.yml') || f.path.endsWith('.yaml');
+          if (tool === 'markdownlint') return f.path.endsWith('.md');
+          const jsTools = [
+            'eslint',
+            'prettier',
+            'typescript',
+            'tslint',
+            'jshint',
+            'standard',
+            'xo',
+            'biome',
+            'deno-lint',
+          ];
+          if (jsTools.includes(tool)) {
+            return ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'].some((ext) =>
+              f.path.endsWith(ext)
+            );
+          }
+          const pyTools = ['pylint', 'flake8', 'black', 'mypy', 'isort', 'pydocstyle', 'pylama'];
+          if (pyTools.includes(tool)) return f.path.endsWith('.py');
+          if (tool === 'rubocop') return f.path.endsWith('.rb');
+          const goTools = ['golangci-lint', 'gofmt', 'go-vet', 'staticcheck', 'ineffassign'];
+          if (goTools.includes(tool)) return f.path.endsWith('.go');
+          if (tool === 'rust-clippy' || tool === 'rustfmt') return f.path.endsWith('.rs');
+          if (tool === 'shellcheck') return f.path.endsWith('.sh') || f.path.endsWith('.bash');
+          if (tool === 'hadolint')
+            return f.path.endsWith('Dockerfile') || f.path.includes('Dockerfile');
+          return true; // For other tools, assume they can analyze any file
+        });
+
+        // Add tool to toolsUsed if it analyzed relevant files (even if no issues found)
+        if (hasRelevantFiles) {
           toolsUsed.push(tool);
+          if (issues.length > 0) {
+            allIssues.push(...issues);
+          }
         }
       } catch (error) {
         console.warn(`Failed to run ${tool}:`, error instanceof Error ? error.message : error);
@@ -205,6 +242,7 @@ export class LinterIntegration {
       rule: issue.rule,
       category: `linter-${issue.tool}`,
       fix: issue.fix,
+      tool: issue.tool,
     }));
   }
 
@@ -223,14 +261,66 @@ export class LinterIntegration {
         return this.runPrettier(files);
       case 'typescript':
         return this.runTypeScript(files);
+      case 'tslint':
+        return this.runTSLint(files);
+      case 'jshint':
+        return this.runJSHint(files);
+      case 'standard':
+        return this.runStandard(files);
+      case 'xo':
+        return this.runXO(files);
+      case 'biome':
+        return this.runBiome(files);
+      case 'deno-lint':
+        return this.runDenoLint(files);
       case 'pylint':
         return this.runPylint(files);
+      case 'flake8':
+        return this.runFlake8(files);
+      case 'black':
+        return this.runBlack(files);
+      case 'mypy':
+        return this.runMypy(files);
+      case 'isort':
+        return this.runIsort(files);
+      case 'pydocstyle':
+        return this.runPydocstyle(files);
+      case 'pylama':
+        return this.runPylama(files);
       case 'rubocop':
         return this.runRuboCop(files);
       case 'golangci-lint':
         return this.runGolangciLint(files);
+      case 'gofmt':
+        return this.runGofmt(files);
+      case 'go-vet':
+        return this.runGoVet(files);
+      case 'staticcheck':
+        return this.runStaticcheck(files);
+      case 'ineffassign':
+        return this.runIneffassign(files);
       case 'rust-clippy':
         return this.runRustClippy(files);
+      case 'rustfmt':
+        return this.runRustfmt(files);
+      case 'checkstyle':
+        return this.runCheckstyle(files);
+      case 'pmd':
+        return this.runPMD(files);
+      case 'spotbugs':
+        return this.runSpotbugs(files);
+      case 'error-prone':
+        return this.runErrorProne(files);
+      case 'shellcheck':
+        return this.runShellCheck(files);
+      case 'hadolint':
+        return this.runHadolint(files);
+      case 'markdownlint':
+        return this.runMarkdownlint(files);
+      case 'yamllint':
+        return this.runYamllint(files);
+      case 'jsonlint':
+        return this.runJsonlint(files);
       case 'custom':
         return this.runCustomLinter(files);
       default:

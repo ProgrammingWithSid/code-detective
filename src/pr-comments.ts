@@ -1,12 +1,12 @@
 import { Octokit } from '@octokit/rest';
 import { EnhancedCommentsBuilder } from './pr-comments/enhanced-comments';
 import {
-    Config,
-    GitLabMergeRequest,
-    PRCommentError,
-    ReviewComment,
-    ReviewResult,
-    Severity,
+  Config,
+  GitLabMergeRequest,
+  PRCommentError,
+  ReviewComment,
+  ReviewResult,
+  Severity,
 } from './types';
 
 // ============================================================================

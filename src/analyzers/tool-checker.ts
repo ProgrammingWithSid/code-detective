@@ -70,7 +70,10 @@ export class ToolChecker {
       case 'bandit':
         return this.checkCommand('bandit', 'pip install bandit');
       case 'gosec':
-        return this.checkCommand('gosec', 'go install github.com/securego/gosec/v2/cmd/gosec@latest');
+        return this.checkCommand(
+          'gosec',
+          'go install github.com/securego/gosec/v2/cmd/gosec@latest'
+        );
       case 'brakeman':
         return this.checkCommand('brakeman', 'gem install brakeman');
       case 'npm-audit':
@@ -239,7 +242,9 @@ export class ToolChecker {
           lines.push(`     Error: ${tool.error}`);
         }
       }
-      lines.push('\n💡 Tip: Code Sherlock will skip unavailable tools and continue with available ones.');
+      lines.push(
+        '\n💡 Tip: Code Sherlock will skip unavailable tools and continue with available ones.'
+      );
       lines.push('   See docs/TOOL_INSTALLATION.md for installation instructions.');
     }
 

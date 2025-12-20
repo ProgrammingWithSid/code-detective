@@ -226,6 +226,7 @@ export class SASTIntegration {
       rule: issue.rule,
       category: `security-${issue.type || 'other'}`,
       fix: issue.fix,
+      tool: issue.tool,
     }));
   }
 

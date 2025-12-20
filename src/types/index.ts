@@ -284,6 +284,7 @@ export interface ReviewComment {
   rule?: string;
   category?: string;
   fix?: string;
+  tool?: string; // Tool that generated this comment (e.g., 'eslint', 'prettier', 'semgrep')
 }
 
 export interface ReviewStats {

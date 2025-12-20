@@ -10,8 +10,8 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { join, dirname, relative } from 'path';
-import { CodeChunk, ChangedFile } from '../types';
+import { join, dirname, normalize, resolve } from 'path';
+import { ChangedFile } from '../types';
 
 // ============================================================================
 // Types
@@ -104,7 +104,7 @@ export class CodegraphAnalyzer {
   /**
    * Build dependency graph from codebase
    */
-  async buildGraph(files: string[]): Promise<DependencyGraph> {
+  buildGraph(files: string[]): DependencyGraph {
     const nodes = new Map<string, DependencyNode>();
     const dependents = new Map<string, Set<string>>();
 
@@ -113,9 +113,20 @@ export class CodegraphAnalyzer {
       if (this.shouldExclude(file)) continue;
 
       try {
-        const node = await this.analyzeFile(file);
+        // Resolve to absolute path first (for file existence check)
+        const absoluteFile = resolve(this.options.rootDir, file);
+        // Then normalize for consistent storage/lookup
+        const normalizedFile = normalize(absoluteFile);
+
+        // Use absolute path for file operations (analyzeFile checks existence)
+        // But pass normalized path to analysis methods so resolveImportPath uses consistent paths
+        const node = this.analyzeFileWithNormalizedPath(absoluteFile, normalizedFile);
         if (node) {
-          nodes.set(file, node);
+          // Update node file path to normalized version
+          node.file = normalizedFile;
+          // Normalize all fileDeps to ensure consistent paths
+          node.fileDeps = node.fileDeps.map((dep) => normalize(dep));
+          nodes.set(normalizedFile, node);
         }
       } catch (error) {
         console.warn(`Failed to analyze ${file}:`, error);
@@ -125,10 +136,12 @@ export class CodegraphAnalyzer {
     // Build reverse dependency map
     for (const [file, node] of nodes) {
       for (const dep of node.fileDeps) {
-        if (!dependents.has(dep)) {
-          dependents.set(dep, new Set());
+        // Normalize dependency path to match stored paths
+        const normalizedDep = normalize(dep);
+        if (!dependents.has(normalizedDep)) {
+          dependents.set(normalizedDep, new Set());
         }
-        dependents.get(dep)!.add(file);
+        dependents.get(normalizedDep)!.add(file);
       }
     }
 
@@ -149,7 +162,12 @@ export class CodegraphAnalyzer {
    * Analyze impact of changes
    */
   analyzeImpact(changes: ChangedFile[]): ImpactAnalysis {
-    const changedFiles = changes.map((c) => c.path);
+    const changedFiles = changes.map((c) => {
+      // Normalize path (handle both absolute and relative paths)
+      return c.path.startsWith('/') || c.path.match(/^[A-Z]:/i)
+        ? normalize(c.path)
+        : normalize(resolve(this.options.rootDir, c.path));
+    });
     const affectedFiles = new Set<string>();
     const dependencyFiles = new Set<string>();
     const impactChain = new Set<string>();
@@ -157,13 +175,23 @@ export class CodegraphAnalyzer {
     // Add changed files to impact chain
     changedFiles.forEach((file) => impactChain.add(file));
 
-    // Find files that depend on changed files
-    for (const file of changedFiles) {
+    // Recursively find all files that depend on changed files (transitive dependencies)
+    const visited = new Set<string>();
+    const queue = [...changedFiles];
+
+    while (queue.length > 0) {
+      const file = queue.shift()!;
+      if (visited.has(file)) continue;
+      visited.add(file);
+
       const dependents = this.graph.dependents.get(file);
       if (dependents) {
         dependents.forEach((dep) => {
-          affectedFiles.add(dep);
-          impactChain.add(dep);
+          if (!visited.has(dep)) {
+            affectedFiles.add(dep);
+            impactChain.add(dep);
+            queue.push(dep); // Add to queue to find its dependents too
+          }
         });
       }
 
@@ -171,8 +199,10 @@ export class CodegraphAnalyzer {
       const node = this.graph.nodes.get(file);
       if (node) {
         node.fileDeps.forEach((dep) => {
-          dependencyFiles.add(dep);
-          impactChain.add(dep);
+          if (!visited.has(dep)) {
+            dependencyFiles.add(dep);
+            impactChain.add(dep);
+          }
         });
       }
     }
@@ -198,7 +228,9 @@ export class CodegraphAnalyzer {
    * Get dependencies for a file
    */
   getDependencies(file: string): DependencyNode | undefined {
-    return this.graph.nodes.get(file);
+    // Use the same path resolution as buildGraph
+    const normalizedFile = this.resolveFilePath(file);
+    return this.graph.nodes.get(normalizedFile);
   }
 
   /**
@@ -249,9 +281,20 @@ export class CodegraphAnalyzer {
   // ============================================================================
 
   /**
+   * Resolve and normalize a file path consistently
+   */
+  private resolveFilePath(file: string): string {
+    // Always resolve relative to rootDir for consistency
+    // If file is already absolute, resolve will return it as-is
+    const absoluteFile = resolve(this.options.rootDir, file);
+    return normalize(absoluteFile);
+  }
+
+  /**
    * Analyze a single file for dependencies
    */
-  private async analyzeFile(file: string): Promise<DependencyNode | null> {
+  private analyzeFile(file: string): DependencyNode | null {
+    // Check if file exists
     if (!existsSync(file)) {
       return null;
     }
@@ -273,6 +316,35 @@ export class CodegraphAnalyzer {
   }
 
   /**
+   * Analyze file with normalized path for consistent dependency resolution
+   */
+  private analyzeFileWithNormalizedPath(
+    absoluteFile: string,
+    normalizedFile: string
+  ): DependencyNode | null {
+    // Check if file exists at absolute path
+    if (!existsSync(absoluteFile)) {
+      return null;
+    }
+
+    const content = readFileSync(absoluteFile, 'utf-8');
+    const ext = absoluteFile.split('.').pop()?.toLowerCase() || '';
+
+    // Detect language and parse accordingly
+    // Use normalizedFile for dependency resolution to ensure consistent paths
+    if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(ext)) {
+      return this.analyzeJavaScriptFile(normalizedFile, content);
+    } else if (ext === 'py') {
+      return this.analyzePythonFile(normalizedFile, content);
+    } else if (ext === 'go') {
+      return this.analyzeGoFile(normalizedFile, content);
+    }
+
+    // Default: basic analysis
+    return this.analyzeBasicFile(normalizedFile, content);
+  }
+
+  /**
    * Analyze JavaScript/TypeScript file
    */
   private analyzeJavaScriptFile(file: string, content: string): DependencyNode {
@@ -281,14 +353,13 @@ export class CodegraphAnalyzer {
     const fileDeps = new Set<string>();
     const internalDeps: DependencyNode['internalDeps'] = [];
 
-    const lines = content.split('\n');
-
     // Parse imports
     const importRegex =
       /import\s+(?:(?:\*\s+as\s+(\w+))|(?:\{([^}]+)\})|(\w+))\s+from\s+['"]([^'"]+)['"]/g;
     let match;
     while ((match = importRegex.exec(content)) !== null) {
       const [, namespace, named, defaultImport, source] = match;
+      // resolveImportPath already normalizes, so we get a normalized path
       const resolvedSource = this.resolveImportPath(file, source);
 
       if (namespace) {
@@ -475,7 +546,7 @@ export class CodegraphAnalyzer {
   /**
    * Basic file analysis (fallback)
    */
-  private analyzeBasicFile(file: string, content: string): DependencyNode {
+  private analyzeBasicFile(file: string, _content: string): DependencyNode {
     return {
       file,
       exports: [],
@@ -495,16 +566,16 @@ export class CodegraphAnalyzer {
       const resolved = join(baseDir, importPath);
       // Try different extensions
       for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '']) {
-        const candidate = resolved + ext;
+        const candidate = normalize(resolved + ext);
         if (existsSync(candidate)) {
           return candidate;
         }
-        const indexCandidate = join(resolved, 'index' + ext);
+        const indexCandidate = normalize(join(resolved, 'index' + ext));
         if (existsSync(indexCandidate)) {
           return indexCandidate;
         }
       }
-      return resolved;
+      return normalize(resolved);
     }
 
     // Handle node_modules imports
@@ -550,7 +621,6 @@ export class CodegraphAnalyzer {
   private getLineNumbers(content: string): Record<number, number> {
     const lineNumbers: Record<number, number> = {};
     let currentLine = 1;
-    let currentPos = 0;
 
     for (let i = 0; i < content.length; i++) {
       lineNumbers[i] = currentLine;
@@ -598,11 +668,23 @@ export class CodegraphAnalyzer {
    */
   private shouldExclude(file: string): boolean {
     const excludePatterns = this.options.excludePatterns || [];
+    const fileName = file.split('/').pop() || file; // Get just the filename
+
     return excludePatterns.some((pattern) => {
       if (pattern.includes('*')) {
+        // For patterns with *, check if it's a filename pattern (contains . which suggests file extension)
+        // Patterns like *.test.* should match filenames only, not directory paths
+        const isFilenamePattern = pattern.includes('.');
+        if (isFilenamePattern) {
+          // Match against filename only to avoid false positives (e.g., codegraph-test-123 matching *.test.*)
+          const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+          return regex.test(fileName);
+        }
+        // For other patterns with *, match against full path
         const regex = new RegExp(pattern.replace(/\*/g, '.*'));
         return regex.test(file);
       }
+      // For patterns without *, check full path (for directory patterns like node_modules)
       return file.includes(pattern);
     });
   }

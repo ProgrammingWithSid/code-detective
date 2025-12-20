@@ -10,7 +10,7 @@
 
 import { LinterIssue } from './linter-integration';
 import { SASTIssue } from './sast-integration';
-import { ReviewComment, Severity } from '../types';
+import { ReviewComment } from '../types';
 
 // ============================================================================
 // Types
@@ -133,10 +133,7 @@ export class FalsePositiveFilter {
       ...options,
     };
 
-    this.patterns = [
-      ...DEFAULT_FALSE_POSITIVE_PATTERNS,
-      ...(options.customPatterns || []),
-    ];
+    this.patterns = [...DEFAULT_FALSE_POSITIVE_PATTERNS, ...(options.customPatterns || [])];
   }
 
   /**
@@ -341,17 +338,26 @@ export class FalsePositiveFilter {
       return true;
     }
 
-    // Filter low-severity suggestions/info
-    if (comment.severity === 'suggestion' || comment.severity === 'info') {
-      // Filter if matches common false positive patterns
-      if (this.matchesFalsePositivePattern(comment, comment.category)) {
-        return true;
-      }
-    }
-
     // Never filter errors
     if (comment.severity === 'error') {
       return false;
+    }
+
+    // Filter warnings/suggestions/info that match false positive patterns
+    if (
+      comment.severity === 'warning' ||
+      comment.severity === 'suggestion' ||
+      comment.severity === 'info'
+    ) {
+      // Filter if matches common false positive patterns
+      if (
+        this.matchesFalsePositivePattern(
+          { message: comment.body, file: comment.file },
+          comment.tool || comment.category
+        )
+      ) {
+        return true;
+      }
     }
 
     return false;

@@ -1,11 +1,42 @@
+# Dependencies
 node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+.nyc_output
+
+# Production
 dist/
+build/
+
+# Misc
+.DS_Store
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
 .env
 .env.local
-.DS_Store
-*.test.ts.snap
-coverage/
-MakeFile
-docs/
-*.md
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test files (temporary)
+test-*.ts
+!test-*.test.ts
+!__tests__/**/*.test.ts
+
+# Temporary test scripts
+test-codegraph.ts
+test-filter.ts
+test-linter.ts
+test-sast.ts
