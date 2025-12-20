@@ -74,6 +74,148 @@ export const IncrementalReviewConfigSchema = z.object({
 });
 export type IncrementalReviewConfig = z.infer<typeof IncrementalReviewConfigSchema>;
 
+export const LinterConfigSchema = z.object({
+  enabled: z.boolean().optional().default(true),
+  tools: z
+    .array(
+      z.enum([
+        // JavaScript/TypeScript
+        'eslint',
+        'prettier',
+        'typescript',
+        'tslint',
+        'jshint',
+        'standard',
+        'xo',
+        'biome',
+        'deno-lint',
+        // Python
+        'pylint',
+        'flake8',
+        'black',
+        'mypy',
+        'isort',
+        'pydocstyle',
+        'pylama',
+        // Ruby
+        'rubocop',
+        // Go
+        'golangci-lint',
+        'gofmt',
+        'go-vet',
+        'staticcheck',
+        'ineffassign',
+        // Rust
+        'rust-clippy',
+        'rustfmt',
+        // Java
+        'checkstyle',
+        'pmd',
+        'spotbugs',
+        'error-prone',
+        // General
+        'shellcheck',
+        'hadolint',
+        'markdownlint',
+        'yamllint',
+        'jsonlint',
+        'custom',
+      ])
+    )
+    .optional()
+    .default([]),
+  customCommands: z.record(z.string()).optional(),
+  ignorePatterns: z.array(z.string()).optional(),
+  workingDir: z.string().optional(),
+  eslint: z
+    .object({
+      configFile: z.string().optional(),
+      extensions: z.array(z.string()).optional(),
+    })
+    .optional(),
+  prettier: z
+    .object({
+      configFile: z.string().optional(),
+      checkOnly: z.boolean().optional(),
+    })
+    .optional(),
+  typescript: z
+    .object({
+      configFile: z.string().optional(),
+      noEmit: z.boolean().optional(),
+    })
+    .optional(),
+});
+export type LinterConfig = z.infer<typeof LinterConfigSchema>;
+
+export const SASTConfigSchema = z.object({
+  enabled: z.boolean().optional().default(true),
+  tools: z
+    .array(
+      z.enum([
+        'semgrep',
+        'sonarqube',
+        'bandit',
+        'gosec',
+        'brakeman',
+        'npm-audit',
+        'snyk',
+        'trivy',
+        'owasp-dependency-check',
+        'safety',
+        'pip-audit',
+        'bundler-audit',
+        'cargo-audit',
+        'mix-audit',
+        'custom',
+      ])
+    )
+    .optional()
+    .default([]),
+  customCommands: z.record(z.string()).optional(),
+  ignorePatterns: z.array(z.string()).optional(),
+  workingDir: z.string().optional(),
+  minSeverity: z.enum(['error', 'warning', 'info', 'suggestion']).optional(),
+  semgrep: z
+    .object({
+      config: z.string().optional(),
+      rules: z.array(z.string()).optional(),
+      severity: z.array(z.string()).optional(),
+    })
+    .optional(),
+  sonarqube: z
+    .object({
+      projectKey: z.string().optional(),
+      serverUrl: z.string().optional(),
+      token: z.string().optional(),
+    })
+    .optional(),
+  bandit: z
+    .object({
+      configFile: z.string().optional(),
+      severityLevel: z.number().optional(),
+    })
+    .optional(),
+  gosec: z
+    .object({
+      severity: z.string().optional(),
+      confidence: z.string().optional(),
+    })
+    .optional(),
+  npmAudit: z
+    .object({
+      auditLevel: z.enum(['low', 'moderate', 'high', 'critical']).optional(),
+    })
+    .optional(),
+  snyk: z
+    .object({
+      org: z.string().optional(),
+      severityThreshold: z.string().optional(),
+    })
+    .optional(),
+});
+export type SASTConfig = z.infer<typeof SASTConfigSchema>;
+
 export const ConfigSchema = z.object({
   aiProvider: AIProviderSchema,
   openai: OpenAIConfigSchema.optional(),
@@ -87,6 +229,8 @@ export const ConfigSchema = z.object({
   batching: BatchingConfigSchema.optional(),
   parallel: ParallelConfigSchema.optional(),
   incrementalReview: IncrementalReviewConfigSchema.optional(),
+  linter: LinterConfigSchema.optional(),
+  sast: SASTConfigSchema.optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

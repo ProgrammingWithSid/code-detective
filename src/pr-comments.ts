@@ -1,11 +1,12 @@
 import { Octokit } from '@octokit/rest';
+import { EnhancedCommentsBuilder } from './pr-comments/enhanced-comments';
 import {
-  Config,
-  GitLabMergeRequest,
-  PRCommentError,
-  ReviewComment,
-  ReviewResult,
-  Severity,
+    Config,
+    GitLabMergeRequest,
+    PRCommentError,
+    ReviewComment,
+    ReviewResult,
+    Severity,
 } from './types';
 
 // ============================================================================
@@ -27,6 +28,12 @@ export interface PRCommentService {
   postComments(comments: ReviewComment[], prNumber: number): Promise<void>;
   postReviewSummary(summary: ReviewResult, prNumber: number): Promise<void>;
   postSuggestions(result: ReviewResult, prNumber: number): Promise<void>;
+  /** Post review decision (approve/request changes/comment) */
+  postReviewDecision(
+    result: ReviewResult,
+    prNumber: number,
+    decision: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+  ): Promise<void>;
 }
 
 interface GitHubPRFile {
@@ -198,6 +205,42 @@ export class GitHubCommentService implements PRCommentService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`Failed to post suggestions: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Post review decision (approve/request changes/comment)
+   */
+  async postReviewDecision(
+    result: ReviewResult,
+    prNumber: number,
+    decision: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+  ): Promise<void> {
+    const decisionResult = EnhancedCommentsBuilder.buildReviewDecision(result);
+    const prHeadSHA = await this.getPRHeadSHA(prNumber);
+
+    try {
+      // Post review with decision
+      await this.octokit.pulls.createReview({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: prNumber,
+        commit_id: prHeadSHA,
+        event: decisionResult.event,
+        body: decisionResult.body,
+        comments: decisionResult.comments.map((comment) => ({
+          path: comment.file,
+          line: comment.line,
+          body: EnhancedCommentsBuilder.formatCommentWithSuggestion(comment),
+        })),
+      });
+
+      console.log(`Posted review decision: ${decision}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to post review decision: ${errorMessage}`);
+      // Fallback to regular comment if review fails
+      await this.postReviewSummary(result, prNumber);
     }
   }
 
@@ -714,6 +757,41 @@ export class GitLabCommentService implements PRCommentService {
     }
   }
 
+  async postReviewDecision(
+    result: ReviewResult,
+    prNumber: number,
+    decision: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+  ): Promise<void> {
+    const decisionResult = EnhancedCommentsBuilder.buildReviewDecision(result);
+    const mr = await this.getMergeRequest(prNumber);
+
+    try {
+      // GitLab uses discussions/notes for reviews
+      // Post the review decision as a note
+      await this.postNote(prNumber, decisionResult.body);
+
+      // Post individual comments
+      for (const comment of decisionResult.comments) {
+        await this.postDiscussion(comment.file, comment, prNumber, mr);
+      }
+
+      // Set approval state if applicable
+      if (decision === 'APPROVE') {
+        await this.approveMergeRequest(prNumber);
+      } else if (decision === 'REQUEST_CHANGES') {
+        // GitLab doesn't have a direct "request changes" - we use unapprove
+        await this.unapproveMergeRequest(prNumber);
+      }
+
+      console.log(`Posted review decision: ${decision}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to post review decision: ${errorMessage}`);
+      // Fallback to regular comment
+      await this.postReviewSummary(result, prNumber);
+    }
+  }
+
   private formatReviewSummary(summary: ReviewResult): string {
     let body = '## 🔍 Code Review Summary\n\n';
     body += `${summary.summary}\n\n`;
@@ -816,6 +894,37 @@ export class GitLabCommentService implements PRCommentService {
       },
       body: JSON.stringify({ body }),
     });
+  }
+
+  private async approveMergeRequest(prNumber: number): Promise<void> {
+    try {
+      await fetch(`${this.baseUrl}/projects/${this.projectId}/merge_requests/${prNumber}/approve`, {
+        method: 'POST',
+        headers: {
+          'PRIVATE-TOKEN': this.token,
+          'Content-Type': 'application/json',
+        },
+      });
+    } catch (error) {
+      console.warn('Failed to approve merge request:', error);
+    }
+  }
+
+  private async unapproveMergeRequest(prNumber: number): Promise<void> {
+    try {
+      await fetch(
+        `${this.baseUrl}/projects/${this.projectId}/merge_requests/${prNumber}/unapprove`,
+        {
+          method: 'POST',
+          headers: {
+            'PRIVATE-TOKEN': this.token,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    } catch (error) {
+      console.warn('Failed to unapprove merge request:', error);
+    }
   }
 
   private formatComment(comment: ReviewComment): string {

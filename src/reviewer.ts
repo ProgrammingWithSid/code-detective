@@ -25,6 +25,11 @@ import { ReviewQualityScorer } from './utils/review-quality';
 import { ReviewStream, ReviewStreamCallbacks } from './utils/review-stream';
 import { ReviewTracker } from './utils/review-tracker';
 import { RuleBasedFilter } from './utils/rule-based-filter';
+import { LinterIntegration, createLinterIntegration } from './analyzers/linter-integration';
+import { SASTIntegration, createSASTIntegration } from './analyzers/sast-integration';
+import { ToolChecker } from './analyzers/tool-checker';
+import { CodegraphAnalyzer, createCodegraphAnalyzer } from './analyzers/codegraph-analyzer';
+import { FalsePositiveFilter, createFalsePositiveFilter } from './analyzers/false-positive-filter';
 
 // ============================================================================
 // Utility Functions
@@ -125,6 +130,10 @@ export class PRReviewer {
   private reviewTracker?: ReviewTracker;
   private namingAnalyzer: NamingAnalyzer;
   private prTitleAnalyzer: PRTitleAnalyzer;
+  private linterIntegration?: LinterIntegration;
+  private sastIntegration?: SASTIntegration;
+  private codegraphAnalyzer?: CodegraphAnalyzer;
+  private falsePositiveFilter: FalsePositiveFilter;
 
   constructor(config: Config, repoPath?: string) {
     this.config = config;
@@ -182,6 +191,36 @@ export class PRReviewer {
       aiProvider: this.aiProvider,
       enabled: true,
     });
+
+    // Initialize linter integration (if enabled)
+    if (config.linter?.enabled && config.linter.tools && config.linter.tools.length > 0) {
+      this.linterIntegration = createLinterIntegration({
+        ...config.linter,
+        workingDir: resolvedRepoPath,
+      });
+    }
+
+    // Initialize SAST integration (if enabled)
+    if (config.sast?.enabled && config.sast.tools && config.sast.tools.length > 0) {
+      this.sastIntegration = createSASTIntegration({
+        ...config.sast,
+        workingDir: resolvedRepoPath,
+      });
+    }
+
+    // Initialize codegraph analyzer (always enabled for impact analysis)
+    this.codegraphAnalyzer = createCodegraphAnalyzer({
+      rootDir: resolvedRepoPath,
+      maxDepth: 5,
+      analyzeInternal: true,
+    });
+
+    // Initialize false positive filter
+    this.falsePositiveFilter = createFalsePositiveFilter({
+      minConfidence: 0.5,
+      enableToolFiltering: true,
+      enablePatternFiltering: true,
+    });
   }
 
   /**
@@ -217,6 +256,36 @@ export class PRReviewer {
 
     if (changedFiles.length === 0) {
       return this.createEmptyResult('No files changed in this PR.');
+    }
+
+    // Step 2.5: Build codegraph and analyze impact (if codegraph enabled)
+    let impactAnalysis;
+    if (this.codegraphAnalyzer) {
+      console.log(chalk.blue(`\n🔗 Building dependency graph...`));
+      try {
+        const allFiles = changedFiles.map((f) => f.path);
+        await this.codegraphAnalyzer.buildGraph(allFiles);
+        impactAnalysis = this.codegraphAnalyzer.analyzeImpact(changedFiles);
+        console.log(
+          chalk.green(
+            `Impact analysis: ${impactAnalysis.affectedFiles.length} affected file(s), ` +
+              `severity: ${impactAnalysis.severity}`
+          )
+        );
+        if (impactAnalysis.affectedFiles.length > 0) {
+          console.log(
+            chalk.gray(
+              `   Affected files: ${impactAnalysis.affectedFiles.slice(0, 5).join(', ')}${
+                impactAnalysis.affectedFiles.length > 5 ? '...' : ''
+              }`
+            )
+          );
+        }
+      } catch (error) {
+        console.warn(
+          chalk.yellow(`⚠️  Codegraph analysis failed: ${error instanceof Error ? error.message : error}`)
+        );
+      }
     }
 
     // Step 3: Chunk the changed files
@@ -262,6 +331,104 @@ export class PRReviewer {
     const ruleBasedIssues = this.ruleBasedFilter.analyzeChunks(chunksToReview);
     const ruleBasedComments = this.ruleBasedFilter.convertToReviewComments(ruleBasedIssues);
     console.log(chalk.green(`Found ${ruleBasedComments.length} issue(s) via rule-based analysis`));
+
+    // Step 3.6: Run linters (if enabled)
+    let linterComments: ReviewComment[] = [];
+    if (this.linterIntegration && this.config.linter?.tools && this.config.linter.tools.length > 0) {
+      // Check tool availability
+      const toolCheck = await ToolChecker.checkLinterTools(this.config.linter.tools);
+      if (!toolCheck.allAvailable && toolCheck.missing.length > 0) {
+        console.log(chalk.yellow(`\n⚠️  Some linter tools are not available:`));
+        console.log(chalk.gray(ToolChecker.formatCheckResults(toolCheck)));
+      }
+
+      console.log(chalk.blue(`\n🔧 Running linters...`));
+      try {
+        const fileContents = await Promise.all(
+          changedFiles.map(async (file) => {
+            const content = await this.git.getFileContent(file.path, targetBranch);
+            return { path: file.path, content };
+          })
+        );
+        const linterResult = await this.linterIntegration.analyze(fileContents);
+        const rawComments = this.linterIntegration.convertToReviewComments(linterResult);
+
+        // Filter false positives
+        const { filtered: filteredComments, stats: filterStats } =
+          this.falsePositiveFilter.filterReviewComments(rawComments);
+        linterComments = filteredComments;
+
+        console.log(
+          chalk.green(
+            `Found ${linterResult.summary.errors} error(s), ${linterResult.summary.warnings} warning(s), ${linterResult.summary.suggestions} suggestion(s) via linters`
+          )
+        );
+        if (filterStats.filteredIssues > 0) {
+          console.log(
+            chalk.gray(
+              `   Filtered ${filterStats.filteredIssues} false positive(s) ` +
+                `(${Math.round(filterStats.filterRate * 100)}% reduction)`
+            )
+          );
+        }
+        if (linterResult.toolsUsed.length > 0) {
+          console.log(chalk.gray(`   Tools used: ${linterResult.toolsUsed.join(', ')}`));
+        }
+      } catch (error) {
+        console.warn(
+          chalk.yellow(`⚠️  Linter analysis failed: ${error instanceof Error ? error.message : error}`)
+        );
+      }
+    }
+
+    // Step 3.7: Run SAST tools (if enabled)
+    let sastComments: ReviewComment[] = [];
+    if (this.sastIntegration && this.config.sast?.tools && this.config.sast.tools.length > 0) {
+      // Check tool availability
+      const toolCheck = await ToolChecker.checkSASTTools(this.config.sast.tools);
+      if (!toolCheck.allAvailable && toolCheck.missing.length > 0) {
+        console.log(chalk.yellow(`\n⚠️  Some SAST tools are not available:`));
+        console.log(chalk.gray(ToolChecker.formatCheckResults(toolCheck)));
+      }
+
+      console.log(chalk.blue(`\n🔒 Running SAST security analysis...`));
+      try {
+        const fileContents = await Promise.all(
+          changedFiles.map(async (file) => {
+            const content = await this.git.getFileContent(file.path, targetBranch);
+            return { path: file.path, content };
+          })
+        );
+        const sastResult = await this.sastIntegration.analyze(fileContents);
+        const rawComments = this.sastIntegration.convertToReviewComments(sastResult);
+
+        // Filter false positives
+        const { filtered: filteredComments, stats: filterStats } =
+          this.falsePositiveFilter.filterReviewComments(rawComments);
+        sastComments = filteredComments;
+
+        console.log(
+          chalk.green(
+            `Found ${sastResult.summary.critical} critical, ${sastResult.summary.high} high, ${sastResult.summary.medium} medium, ${sastResult.summary.low} low severity issue(s) via SAST tools`
+          )
+        );
+        if (filterStats.filteredIssues > 0) {
+          console.log(
+            chalk.gray(
+              `   Filtered ${filterStats.filteredIssues} false positive(s) ` +
+                `(${Math.round(filterStats.filterRate * 100)}% reduction)`
+            )
+          );
+        }
+        if (sastResult.toolsUsed.length > 0) {
+          console.log(chalk.gray(`   Tools used: ${sastResult.toolsUsed.join(', ')}`));
+        }
+      } catch (error) {
+        console.warn(
+          chalk.yellow(`⚠️  SAST analysis failed: ${error instanceof Error ? error.message : error}`)
+        );
+      }
+    }
 
     // Step 4: Review code with AI (with caching and batching)
     console.log(chalk.blue(`\n🤖 Reviewing code with ${this.config.aiProvider}...`));
@@ -325,8 +492,13 @@ export class PRReviewer {
       throw new Error('Review result is null');
     }
 
-    // Step 5: Merge rule-based and AI comments
-    const allComments: ReviewComment[] = [...ruleBasedComments, ...reviewResult.comments];
+    // Step 5: Merge rule-based, linter, SAST, and AI comments
+    const allComments: ReviewComment[] = [
+      ...ruleBasedComments,
+      ...linterComments,
+      ...sastComments,
+      ...reviewResult.comments,
+    ];
 
     // Step 5.5: Deduplicate comments
     const { comments: deduplicatedComments, stats: dedupStats } =
@@ -430,6 +602,11 @@ export class PRReviewer {
       finalResult
     );
     await postCommentsPromise;
+
+    // Step 8.5: Post review decision (CodeRabbit-like feature)
+    if (postComments && this.config.pr?.number) {
+      await this.postReviewDecision(finalResult);
+    }
 
     // Step 9: Mark chunks as reviewed (for incremental reviews)
     if (this.reviewTracker && chunksToReview.length > 0) {
@@ -795,6 +972,36 @@ export class PRReviewer {
     await this.prCommentService.postSuggestions(result, prNumber);
     if (result.namingSuggestions?.length || result.prTitleSuggestion) {
       console.log(chalk.green('Posted suggestions'));
+    }
+
+    // Post review decision (CodeRabbit-like feature)
+    await this.postReviewDecision(result, prNumber);
+  }
+
+  /**
+   * Post review decision (approve/request changes/comment)
+   */
+  private async postReviewDecision(result: ReviewResult, prNumber: number): Promise<void> {
+    try {
+      // Determine decision based on review results
+      const errors = result.comments.filter((c) => c.severity === 'error');
+      const warnings = result.comments.filter((c) => c.severity === 'warning');
+
+      let decision: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+      if (errors.length > 0 || warnings.length > 3) {
+        decision = 'REQUEST_CHANGES';
+      } else if (warnings.length > 0 || result.comments.length > 0) {
+        decision = 'COMMENT';
+      } else {
+        decision = 'APPROVE';
+      }
+
+      await this.prCommentService.postReviewDecision(result, prNumber, decision);
+      console.log(chalk.green(`Posted review decision: ${decision}`));
+    } catch (error) {
+      console.warn(
+        chalk.yellow(`Failed to post review decision: ${error instanceof Error ? error.message : error}`)
+      );
     }
   }
 

@@ -33,5 +33,35 @@
   "gitlab": {
     "token": "your-gitlab-token",
     "projectId": "your-project-id"
+  },
+  "linter": {
+    "enabled": true,
+    "tools": ["eslint", "prettier", "typescript"],
+    "ignorePatterns": ["node_modules/**", "dist/**", "build/**"],
+    "eslint": {
+      "configFile": ".eslintrc.json",
+      "extensions": [".js", ".jsx", ".ts", ".tsx"]
+    },
+    "prettier": {
+      "configFile": ".prettierrc",
+      "checkOnly": true
+    },
+    "typescript": {
+      "configFile": "tsconfig.json",
+      "noEmit": true
+    }
+  },
+  "sast": {
+    "enabled": true,
+    "tools": ["semgrep", "npm-audit"],
+    "minSeverity": "warning",
+    "ignorePatterns": ["node_modules/**", "dist/**", "build/**", "__tests__/**"],
+    "semgrep": {
+      "config": "auto",
+      "severity": ["ERROR", "WARNING"]
+    },
+    "npmAudit": {
+      "auditLevel": "moderate"
+    }
   }
 }
