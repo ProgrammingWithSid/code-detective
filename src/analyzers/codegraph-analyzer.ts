@@ -291,31 +291,6 @@ export class CodegraphAnalyzer {
   }
 
   /**
-   * Analyze a single file for dependencies
-   */
-  private analyzeFile(file: string): DependencyNode | null {
-    // Check if file exists
-    if (!existsSync(file)) {
-      return null;
-    }
-
-    const content = readFileSync(file, 'utf-8');
-    const ext = file.split('.').pop()?.toLowerCase() || '';
-
-    // Detect language and parse accordingly
-    if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(ext)) {
-      return this.analyzeJavaScriptFile(file, content);
-    } else if (ext === 'py') {
-      return this.analyzePythonFile(file, content);
-    } else if (ext === 'go') {
-      return this.analyzeGoFile(file, content);
-    }
-
-    // Default: basic analysis
-    return this.analyzeBasicFile(file, content);
-  }
-
-  /**
    * Analyze file with normalized path for consistent dependency resolution
    */
   private analyzeFileWithNormalizedPath(
@@ -359,6 +334,8 @@ export class CodegraphAnalyzer {
     let match;
     while ((match = importRegex.exec(content)) !== null) {
       const [, namespace, named, defaultImport, source] = match;
+      if (!source) continue; // Skip if source is missing
+
       // resolveImportPath already normalizes, so we get a normalized path
       const resolvedSource = this.resolveImportPath(file, source);
 
@@ -370,7 +347,11 @@ export class CodegraphAnalyzer {
         });
         fileDeps.add(resolvedSource);
       } else if (named) {
-        const symbols = named.split(',').map((s) => s.trim().split(' as ')[0].trim());
+        const namedValue: string = named;
+        const symbols = namedValue.split(',').map((s) => {
+          const parts = s.trim().split(' as ');
+          return parts[0]?.trim() || s.trim();
+        });
         symbols.forEach((symbol) => {
           imports.push({
             symbol,
@@ -397,7 +378,11 @@ export class CodegraphAnalyzer {
       if (singleExport) {
         exports.push(singleExport);
       } else if (namedExports) {
-        const symbols = namedExports.split(',').map((s) => s.trim().split(' as ')[0].trim());
+        const namedExportsValue: string = namedExports;
+        const symbols = namedExportsValue.split(',').map((s) => {
+          const parts = s.trim().split(' as ');
+          return parts[0]?.trim() || s.trim();
+        });
         exports.push(...symbols);
       }
     }
@@ -410,6 +395,8 @@ export class CodegraphAnalyzer {
 
       while ((match = functionCallRegex.exec(content)) !== null) {
         const callee = match[1];
+        if (!callee) continue; // Skip if callee is missing
+
         const line = lineNumbers[match.index] || 1;
 
         // Check if it's a call to an imported function
@@ -452,6 +439,8 @@ export class CodegraphAnalyzer {
     let match;
     while ((match = importRegex.exec(content)) !== null) {
       const [, module, symbols] = match;
+      if (!symbols) continue; // Skip if symbols is missing
+
       if (module) {
         const resolvedSource = this.resolvePythonImport(file, module);
         const symbolList = symbols.split(',').map((s) => s.trim());
@@ -479,7 +468,9 @@ export class CodegraphAnalyzer {
     // Parse exports (functions/classes defined at module level)
     const exportRegex = /^(?:def|class)\s+(\w+)/gm;
     while ((match = exportRegex.exec(content)) !== null) {
-      exports.push(match[1]);
+      if (match[1]) {
+        exports.push(match[1]);
+      }
     }
 
     return {
@@ -508,7 +499,7 @@ export class CodegraphAnalyzer {
         const importLines = multiImports.split('\n').map((line) => line.trim());
         importLines.forEach((line) => {
           const importMatch = line.match(/"([^"]+)"/);
-          if (importMatch) {
+          if (importMatch && importMatch[1]) {
             const source = importMatch[1];
             fileDeps.add(source);
             imports.push({
@@ -531,7 +522,9 @@ export class CodegraphAnalyzer {
     // Parse exports (capitalized functions/types)
     const exportRegex = /^(?:func|type|const|var)\s+([A-Z]\w+)/gm;
     while ((match = exportRegex.exec(content)) !== null) {
-      exports.push(match[1]);
+      if (match[1]) {
+        exports.push(match[1]);
+      }
     }
 
     return {
@@ -638,7 +631,7 @@ export class CodegraphAnalyzer {
   private getCurrentFunction(content: string, position: number): string {
     const before = content.substring(0, position);
     const functionMatch = before.match(/(?:function|const|let|var)\s+(\w+)\s*[=:]/);
-    if (functionMatch) {
+    if (functionMatch && functionMatch[1]) {
       return functionMatch[1];
     }
     return 'anonymous';

@@ -158,11 +158,12 @@ export class FalsePositiveFilter {
       if (!stats.byTool[issue.tool]) {
         stats.byTool[issue.tool] = { filtered: 0, total: 0 };
       }
-      stats.byTool[issue.tool].total++;
+      const toolStats = stats.byTool[issue.tool]!; // Non-null assertion: we just set it above
+      toolStats.total++;
 
       // Check if should filter
       if (this.shouldFilterLinterIssue(issue)) {
-        stats.byTool[issue.tool].filtered++;
+        toolStats.filtered++;
         stats.filteredIssues++;
         continue;
       }
@@ -198,11 +199,12 @@ export class FalsePositiveFilter {
       if (!stats.byTool[issue.tool]) {
         stats.byTool[issue.tool] = { filtered: 0, total: 0 };
       }
-      stats.byTool[issue.tool].total++;
+      const toolStats = stats.byTool[issue.tool]!; // Non-null assertion: we just set it above
+      toolStats.total++;
 
       // Check if should filter
       if (this.shouldFilterSASTIssue(issue)) {
-        stats.byTool[issue.tool].filtered++;
+        toolStats.filtered++;
         stats.filteredIssues++;
         continue;
       }

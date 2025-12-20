@@ -253,6 +253,20 @@ export class SASTIntegration {
         return this.runNpmAudit();
       case 'snyk':
         return this.runSnyk();
+      case 'trivy':
+        return this.runTrivy(files);
+      case 'owasp-dependency-check':
+        return this.runOWASPDependencyCheck();
+      case 'safety':
+        return this.runSafety();
+      case 'pip-audit':
+        return this.runPipAudit();
+      case 'bundler-audit':
+        return this.runBundlerAudit();
+      case 'cargo-audit':
+        return this.runCargoAudit();
+      case 'mix-audit':
+        return this.runMixAudit();
       case 'custom':
         return this.runCustomSAST(files);
       default:
