@@ -38,7 +38,7 @@ jobs:
             --min-severity info
 
       - name: Upload SARIF results
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: security-results.sarif
 

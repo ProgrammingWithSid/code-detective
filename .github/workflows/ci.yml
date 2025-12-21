@@ -108,6 +108,8 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -131,7 +133,7 @@ jobs:
         run: node dist/cli/index.js security -p src --sarif security-results.sarif
 
       - name: Upload SARIF results
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-results.sarif
