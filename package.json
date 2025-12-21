@@ -1,6 +1,6 @@
 {
   "name": "code-sherlock",
-  "version": "3.1.9",
+  "version": "3.2.0",
   "description": "AST-based PR reviewer using chunkyyy for semantic code chunking. Analyze code changes with AI-powered review using OpenAI or Claude.",
   "keywords": [
     "pr-review",
