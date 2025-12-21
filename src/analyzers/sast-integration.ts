@@ -332,7 +332,7 @@ export class SASTIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }
@@ -401,7 +401,7 @@ export class SASTIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }
@@ -458,7 +458,7 @@ export class SASTIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }
@@ -510,7 +510,7 @@ export class SASTIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }
@@ -567,7 +567,7 @@ export class SASTIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       // npm audit returns non-zero exit code when vulnerabilities are found
       if (error instanceof Error && error.message.includes('Command failed')) {
         // Try to parse the error output

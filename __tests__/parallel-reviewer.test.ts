@@ -30,6 +30,8 @@ describe('ParallelReviewer', () => {
     reviewer = new ParallelReviewer();
     mockAIProvider = {
       reviewCode: jest.fn(),
+      deepDiveReview: jest.fn(),
+      scoutReview: jest.fn().mockResolvedValue({ complexityScore: 5, criticalFiles: [] }),
     } as unknown as jest.Mocked<AIProviderInterface>;
   });
 

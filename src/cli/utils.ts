@@ -9,11 +9,11 @@ import { join, relative, resolve } from 'path';
 /**
  * Configuration type
  */
-interface SherlockConfig {
+export interface SherlockConfig {
   model: string;
-  rules: Record<string, unknown>;
+  rules: Record<string, string | number | boolean | string[]>;
   ignore: string[];
-  [key: string]: unknown;
+  [key: string]: string | number | boolean | string[] | object | undefined;
 }
 
 /**
@@ -31,7 +31,7 @@ export function loadConfig(configPath: string, options: Partial<SherlockConfig>)
       const content = readFileSync(configPath, 'utf-8');
       const config = JSON.parse(content) as Partial<SherlockConfig>;
       return { ...defaults, ...config, ...options };
-    } catch (error: unknown) {
+    } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       console.warn(`Warning: Could not parse config file: ${errorMsg}`);
     }
@@ -156,7 +156,10 @@ function shouldIgnore(path: string, patterns: string[]): boolean {
 /**
  * Format output based on type
  */
-export function formatOutput(data: unknown, format: string): string {
+export function formatOutput(
+  data: object | string | number | boolean | null | undefined,
+  format: string
+): string {
   switch (format) {
     case 'json':
       return JSON.stringify(data, null, 2);
@@ -170,7 +173,7 @@ export function formatOutput(data: unknown, format: string): string {
 /**
  * Format data as markdown
  */
-function formatMarkdown(data: unknown): string {
+function formatMarkdown(data: object | string | number | boolean | null | undefined): string {
   if (typeof data === 'string') {
     return data;
   }

@@ -362,7 +362,7 @@ export class LinterIntegration {
           message: string;
           ruleId?: string;
           severity: number;
-          fix?: unknown;
+          fix?: object;
         }>;
       }>;
       const issues: LinterIssue[] = [];
@@ -385,7 +385,7 @@ export class LinterIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       // ESLint might not be installed or configured
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
@@ -434,7 +434,7 @@ export class LinterIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }
@@ -481,7 +481,7 @@ export class LinterIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       // TypeScript errors are expected when there are type issues
       if (error instanceof Error && error.message.includes('Command failed')) {
         // Parse the error output
@@ -552,7 +552,7 @@ export class LinterIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }
@@ -611,7 +611,7 @@ export class LinterIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }
@@ -660,7 +660,7 @@ export class LinterIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }
@@ -719,7 +719,7 @@ export class LinterIntegration {
       }
 
       return issues;
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.message.includes('Command failed')) {
         return [];
       }

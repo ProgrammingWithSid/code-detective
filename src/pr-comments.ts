@@ -431,7 +431,7 @@ export class GitHubCommentService implements PRCommentService {
           console.error(`Error status: ${(error as { status?: number }).status}`);
         }
         if (error instanceof Error && 'response' in error) {
-          const response = (error as { response?: { data?: unknown } }).response;
+          const response = (error as { response?: { data?: object | string } }).response;
           console.error(`Error response:`, JSON.stringify(response?.data, null, 2));
         }
         // Don't throw - continue with other files

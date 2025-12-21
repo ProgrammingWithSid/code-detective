@@ -14,7 +14,7 @@ import { resolve } from 'path';
 import { createPerformanceAnalyzer, createSecurityAnalyzer } from '../../analyzers';
 import { createAutoFix } from '../../autofix';
 import { Config, ReviewComment, ReviewResult } from '../../types';
-import { getFiles, loadConfig } from '../utils';
+import { getFiles, loadConfig, SherlockConfig } from '../utils';
 
 // Types for lazy-loaded modules
 interface PRReviewerClass {
@@ -297,7 +297,7 @@ async function runPathReview(options: ReviewOptions, spinner: ora.Ora): Promise<
 
   // Load configuration
   const configPath = options.config ? resolve(options.config) : '.sherlockrc.json';
-  const config = loadConfig(configPath, options as Record<string, unknown>);
+  const config = loadConfig(configPath, options as unknown as Partial<SherlockConfig>);
 
   spinner.text = 'Scanning files...';
 

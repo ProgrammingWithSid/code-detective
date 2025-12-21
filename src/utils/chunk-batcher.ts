@@ -43,8 +43,13 @@ export class ChunkBatcher {
     let currentBatch: CodeChunk[] = [];
     let currentTokens = 0;
 
+    // Sort chunks by priority score if present (highest first)
+    const sortedChunks = [...chunks].sort(
+      (a, b) => (b.priorityScore || 0) - (a.priorityScore || 0)
+    );
+
     // Group by file first if enabled
-    const groupedChunks = this.config.groupByFile ? this.groupByFile(chunks) : [chunks];
+    const groupedChunks = this.config.groupByFile ? this.groupByFile(sortedChunks) : [sortedChunks];
 
     for (const group of groupedChunks) {
       for (const chunk of group) {

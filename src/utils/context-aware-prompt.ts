@@ -9,6 +9,12 @@ export interface ReviewContext {
   dependencies?: Array<{ name: string; source: string }>;
   codebasePatterns?: string[];
   language?: string;
+  relationships?: Array<{
+    type: 'caller' | 'callee' | 'signature';
+    symbol: string;
+    file: string;
+    context: string;
+  }>;
 }
 
 /**
@@ -40,6 +46,11 @@ export class ContextAwarePromptBuilder {
     // Add codebase patterns
     if (context.codebasePatterns && context.codebasePatterns.length > 0) {
       prompt += this.addCodebasePatterns(context.codebasePatterns);
+    }
+
+    // Add relationship context (deeper dependency info)
+    if (context.relationships && context.relationships.length > 0) {
+      prompt += this.addRelationshipContext(context.relationships);
     }
 
     // Add global rules
@@ -170,11 +181,42 @@ Analyze the provided code and identify issues in the following categories:
 `,
     };
 
-    let context = '\n## File Type Context\n\n';
+    const languageContexts: Record<string, string> = {
+      python: `
+## Python Best Practices
+- Verify PEP 8 compliance.
+- Check for proper exception handling (avoid bare except:).
+- Validate type hinting (typing) usage.
+- Look for common pitfalls: mutable default arguments, late binding in closures.
+- Ensure proper resource management (with statements).
+- Verify docstring quality and completeness.
+`,
+      go: `
+## Go Best Practices
+- Check for proper error handling (if err != nil).
+- Verify idiomatic naming (MixedCaps, no underscores).
+- Validate goroutine and channel usage (leaks, deadlocks).
+- Check for proper use of interfaces (implicit implementation).
+- Ensure defer is used for resource cleanup.
+`,
+      rust: `
+## Rust Best Practices
+- Check for idiomatic Use of Result and Option.
+- Verify ownership and borrowing (clones that could be references).
+- Validate unsafe blocks usage.
+- Check for proper use of traits and generics.
+- Look for potential panics (unwrap, expect).
+`,
+    };
+
+    let context = '\n## Contextual Guidelines\n\n';
     for (const fileType of fileTypes) {
       const lowerType = fileType.toLowerCase();
       if (typeContexts[lowerType]) {
         context += typeContexts[lowerType];
+      }
+      if (languageContexts[lowerType]) {
+        context += languageContexts[lowerType];
       }
     }
 
@@ -194,6 +236,24 @@ Analyze the provided code and identify issues in the following categories:
     }
 
     context += '\nConsider how these dependencies are used and whether they are appropriate.\n';
+
+    return context;
+  }
+
+  /**
+   * Add relationship context
+   */
+  private addRelationshipContext(
+    relationships: Array<{ type: string; symbol: string; file: string; context: string }>
+  ): string {
+    let context = '\n## Symbol Relationship Context\n\n';
+    context += 'The following related symbols and their contexts were found in the codebase:\n';
+
+    for (const rel of relationships) {
+      context += `### ${rel.symbol} (${rel.type})\n`;
+      context += `**File:** ${rel.file}\n`;
+      context += `**Context:**\n\`\`\`\n${rel.context}\n\`\`\`\n\n`;
+    }
 
     return context;
   }

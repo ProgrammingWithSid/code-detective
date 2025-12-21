@@ -1,7 +1,6 @@
 import { Chunkyyy } from 'chunkyyy';
 import { existsSync, readFileSync } from 'fs';
-import { extname } from 'path';
-import { join } from 'path';
+import { extname, join } from 'path';
 import { GitService } from './git';
 import { ChangedFile, ChunkyyyChunk, CodeChunk, CodeSherlockError, FileLanguageMap } from './types';
 
@@ -250,7 +249,7 @@ export class ChunkService {
       const dependencies = chunk.dependencies?.map((dep) => {
         if (typeof dep === 'string') return dep;
         if (typeof dep === 'object' && dep !== null && 'name' in dep) {
-          return String((dep as { name: unknown }).name);
+          return String((dep as { name: string }).name);
         }
         return String(dep);
       });

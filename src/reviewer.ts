@@ -1,5 +1,14 @@
 import chalk from 'chalk';
 import { AIProviderFactory, AIProviderInterface } from './ai-provider';
+import {
+  CodegraphAnalyzer,
+  ImpactAnalysis,
+  createCodegraphAnalyzer,
+} from './analyzers/codegraph-analyzer';
+import { FalsePositiveFilter, createFalsePositiveFilter } from './analyzers/false-positive-filter';
+import { LinterIntegration, createLinterIntegration } from './analyzers/linter-integration';
+import { SASTIntegration, createSASTIntegration } from './analyzers/sast-integration';
+import { ToolChecker } from './analyzers/tool-checker';
 import { ChunkService } from './chunker';
 import { GitService } from './git';
 import { PRCommentService, PRCommentServiceFactory } from './pr-comments';
@@ -16,20 +25,15 @@ import {
 } from './types';
 import { ChunkBatcher } from './utils/chunk-batcher';
 import { CommentDeduplicator } from './utils/comment-deduplicator';
-import { CommentPrioritizer } from './utils/comment-prioritizer';
+import { CommentPrioritizer, PrioritizedComment } from './utils/comment-prioritizer';
 import { NamingAnalyzer } from './utils/naming-analyzer';
-import { PRTitleAnalyzer } from './utils/pr-title-analyzer';
 import { ParallelReviewer } from './utils/parallel-reviewer';
+import { PRTitleAnalyzer } from './utils/pr-title-analyzer';
 import { ReviewCache } from './utils/review-cache';
 import { ReviewQualityScorer } from './utils/review-quality';
 import { ReviewStream, ReviewStreamCallbacks } from './utils/review-stream';
 import { ReviewTracker } from './utils/review-tracker';
 import { RuleBasedFilter } from './utils/rule-based-filter';
-import { LinterIntegration, createLinterIntegration } from './analyzers/linter-integration';
-import { SASTIntegration, createSASTIntegration } from './analyzers/sast-integration';
-import { ToolChecker } from './analyzers/tool-checker';
-import { CodegraphAnalyzer, createCodegraphAnalyzer } from './analyzers/codegraph-analyzer';
-import { FalsePositiveFilter, createFalsePositiveFilter } from './analyzers/false-positive-filter';
 
 // ============================================================================
 // Utility Functions
@@ -137,7 +141,7 @@ export class PRReviewer {
 
   constructor(config: Config, repoPath?: string) {
     this.config = config;
-    const resolvedRepoPath: string = repoPath ?? process.cwd();
+    const resolvedRepoPath = repoPath ?? process.cwd();
     this.git = new GitService(resolvedRepoPath);
     this.chunker = new ChunkService(resolvedRepoPath);
     this.aiProvider = AIProviderFactory.create(config);
@@ -225,14 +229,10 @@ export class PRReviewer {
 
   /**
    * Review a PR by branch name
-   * @param targetBranch - The feature/PR branch to review
-   * @param postComments - Whether to post comments to the PR
-   * @param baseBranchOverride - Optional base branch override
-   * @param streamCallbacks - Optional callbacks for streaming review progress
    */
   async reviewPR(
     targetBranch: string,
-    postComments: boolean = true,
+    postComments = true,
     baseBranchOverride?: string,
     streamCallbacks?: ReviewStreamCallbacks
   ): Promise<ReviewResult> {
@@ -242,70 +242,105 @@ export class PRReviewer {
 
     // Step 1: Checkout to target branch
     console.log(chalk.blue(`\n🔀 Checking out to branch: ${targetBranch}`));
-    const checkoutPromise: Promise<void> = this.git.checkoutBranch(targetBranch);
-    await checkoutPromise;
+    await this.git.checkoutBranch(targetBranch);
 
     // Step 2: Get changed files
     console.log(chalk.blue(`\n📁 Detecting changes unique to ${targetBranch}...`));
-    const changedFilesPromise: Promise<ChangedFile[]> = this.git.getChangedFiles(
-      targetBranch,
-      baseBranch
-    );
-    const changedFiles = await changedFilesPromise;
+    const changedFiles = await this.git.getChangedFiles(targetBranch, baseBranch);
     console.log(chalk.green(`Found ${changedFiles.length} changed file(s)`));
 
     if (changedFiles.length === 0) {
       return this.createEmptyResult('No files changed in this PR.');
     }
 
-    // Step 2.5: Build codegraph and analyze impact (if codegraph enabled)
-    let impactAnalysis;
-    if (this.codegraphAnalyzer) {
-      console.log(chalk.blue(`\n🔗 Building dependency graph...`));
-      try {
-        const allFiles = changedFiles.map((f) => f.path);
-        this.codegraphAnalyzer.buildGraph(allFiles);
-        impactAnalysis = this.codegraphAnalyzer.analyzeImpact(changedFiles);
-        console.log(
-          chalk.green(
-            `Impact analysis: ${impactAnalysis.affectedFiles.length} affected file(s), ` +
-              `severity: ${impactAnalysis.severity}`
-          )
-        );
-        if (impactAnalysis.affectedFiles.length > 0) {
-          console.log(
-            chalk.gray(
-              `   Affected files: ${impactAnalysis.affectedFiles.slice(0, 5).join(', ')}${
-                impactAnalysis.affectedFiles.length > 5 ? '...' : ''
-              }`
-            )
-          );
-        }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(chalk.yellow(`⚠️  Codegraph analysis failed: ${errorMessage}`));
-      }
+    // Step 2.5 & 3: Run analysis steps in parallel for better performance
+    console.log(chalk.blue(`\n🚀 Running analysis pipeline in parallel...`));
+    const analysisStartTime = Date.now();
+
+    // 1. Impact Analysis Promise
+    const impactAnalysisPromise = this.codegraphAnalyzer
+      ? (async (): Promise<ImpactAnalysis | null> => {
+          try {
+            const allFiles = changedFiles.map((f) => f.path);
+            await this.codegraphAnalyzer!.buildGraph(allFiles);
+            return this.codegraphAnalyzer!.analyzeImpact(changedFiles);
+          } catch (error) {
+            console.warn(
+              chalk.yellow(
+                `⚠️  Codegraph analysis failed: ${error instanceof Error ? error.message : String(error)}`
+              )
+            );
+            return null;
+          }
+        })()
+      : Promise.resolve<ImpactAnalysis | null>(null);
+
+    // 2. Chunking Promise
+    const chunksPromise = this.chunker.chunkChangedFiles(changedFiles, targetBranch);
+
+    // 3. Linter Promise
+    const linterPromise = this.runLinterParallel(changedFiles, targetBranch);
+
+    // 4. SAST Promise
+    const sastPromise = this.runSASTParallel(changedFiles, targetBranch);
+
+    // Wait for all non-dependent analysis steps to complete
+    const [impactAnalysis, chunks, linterComments, sastComments] = await Promise.all([
+      impactAnalysisPromise,
+      chunksPromise,
+      linterPromise,
+      sastPromise,
+    ]);
+
+    const analysisDuration = Date.now() - analysisStartTime;
+    console.log(chalk.green(`✅ Analysis pipeline completed in ${analysisDuration}ms`));
+
+    if (impactAnalysis) {
+      console.log(
+        chalk.green(
+          `Impact analysis: ${impactAnalysis.affectedFiles.length} affected file(s), ` +
+            `severity: ${impactAnalysis.severity}`
+        )
+      );
+
+      // Assign priority scores to chunks based on impact
+      chunks.forEach((chunk) => {
+        const isAffected = impactAnalysis.affectedFiles.includes(chunk.file);
+        const isDirect = impactAnalysis.changedFiles.includes(chunk.file);
+
+        let score = 0;
+        if (isDirect) score += 50;
+        if (isAffected) score += 30;
+
+        // Boost based on impact severity
+        if (impactAnalysis.severity === 'high') score += 20;
+        else if (impactAnalysis.severity === 'medium') score += 10;
+
+        chunk.priorityScore = score;
+        chunk.impactLevel = impactAnalysis.severity;
+      });
     }
 
-    // Step 3: Chunk the changed files
-    console.log(chalk.blue(`\n🔪 Chunking code using chunkyyy...`));
-    const chunksPromise: Promise<CodeChunk[]> = this.chunker.chunkChangedFiles(
-      changedFiles,
-      targetBranch
-    );
-    const chunks = await chunksPromise;
     console.log(chalk.green(`Generated ${chunks.length} code chunk(s)`));
 
     if (chunks.length === 0) {
       return this.createEmptyResult('No code chunks could be generated from changed files.');
     }
 
-    // Step 3.25: Filter chunks for incremental review (if enabled)
+    // Step 3.5: Run rule-based pre-filtering (needs chunks)
+    console.log(chalk.blue(`\n🔍 Running rule-based pre-filtering...`));
+    const ruleBasedIssues = this.ruleBasedFilter.analyzeChunks(chunks);
+    const ruleBasedComments = this.ruleBasedFilter.convertToReviewComments(ruleBasedIssues);
+    console.log(chalk.green(`Found ${ruleBasedComments.length} issue(s) via rule-based analysis`));
+
+    // Step 4: Review code with AI (with caching and batching)
+    console.log(chalk.blue(`\n🤖 Reviewing code with ${this.config.aiProvider}...`));
+
+    // Step 4.1: Filter chunks for incremental review (if enabled)
     let chunksToReview = chunks;
     if (this.reviewTracker) {
       const { chunksToReview: filteredChunks, stats: trackerStats } =
         this.reviewTracker.filterChunksForReview(chunks, targetBranch, baseBranch);
-
       chunksToReview = filteredChunks;
 
       if (trackerStats.skippedChunks > 0) {
@@ -316,132 +351,32 @@ export class PRReviewer {
           )
         );
       }
-      if (trackerStats.newChunks > 0 || trackerStats.changedChunks > 0) {
-        console.log(
-          chalk.gray(
-            `   ${trackerStats.newChunks} new chunk(s), ${trackerStats.changedChunks} changed chunk(s)`
-          )
-        );
-      }
     }
 
-    // Step 3.5: Run rule-based pre-filtering
-    console.log(chalk.blue(`\n🔍 Running rule-based pre-filtering...`));
-    const ruleBasedIssues = this.ruleBasedFilter.analyzeChunks(chunksToReview);
-    const ruleBasedComments = this.ruleBasedFilter.convertToReviewComments(ruleBasedIssues);
-    console.log(chalk.green(`Found ${ruleBasedComments.length} issue(s) via rule-based analysis`));
-
-    // Step 3.6: Run linters (if enabled)
-    let linterComments: ReviewComment[] = [];
-    if (
-      this.linterIntegration &&
-      this.config.linter?.tools &&
-      this.config.linter.tools.length > 0
-    ) {
-      // Check tool availability
-      const toolCheck = await ToolChecker.checkLinterTools(this.config.linter.tools);
-      if (!toolCheck.allAvailable && toolCheck.missing.length > 0) {
-        console.log(chalk.yellow(`\n⚠️  Some linter tools are not available:`));
-        console.log(chalk.gray(ToolChecker.formatCheckResults(toolCheck)));
-      }
-
-      console.log(chalk.blue(`\n🔧 Running linters...`));
-      try {
-        const fileContents = await Promise.all(
-          changedFiles.map(async (file) => {
-            const content = await this.git.getFileContent(file.path, targetBranch);
-            return { path: file.path, content };
-          })
-        );
-        const linterResult = await this.linterIntegration.analyze(fileContents);
-        const rawComments = this.linterIntegration.convertToReviewComments(linterResult);
-
-        // Filter false positives
-        const { filtered: filteredComments, stats: filterStats } =
-          this.falsePositiveFilter.filterReviewComments(rawComments);
-        linterComments = filteredComments;
-
-        console.log(
-          chalk.green(
-            `Found ${linterResult.summary.errors} error(s), ${linterResult.summary.warnings} warning(s), ${linterResult.summary.suggestions} suggestion(s) via linters`
-          )
-        );
-        if (filterStats.filteredIssues > 0) {
-          console.log(
-            chalk.gray(
-              `   Filtered ${filterStats.filteredIssues} false positive(s) ` +
-                `(${Math.round(filterStats.filterRate * 100)}% reduction)`
-            )
-          );
-        }
-        if (linterResult.toolsUsed.length > 0) {
-          console.log(chalk.gray(`   Tools used: ${linterResult.toolsUsed.join(', ')}`));
-        }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(chalk.yellow(`⚠️  Linter analysis failed: ${errorMessage}`));
-      }
-    }
-
-    // Step 3.7: Run SAST tools (if enabled)
-    let sastComments: ReviewComment[] = [];
-    if (this.sastIntegration && this.config.sast?.tools && this.config.sast.tools.length > 0) {
-      // Check tool availability
-      const toolCheck = await ToolChecker.checkSASTTools(this.config.sast.tools);
-      if (!toolCheck.allAvailable && toolCheck.missing.length > 0) {
-        console.log(chalk.yellow(`\n⚠️  Some SAST tools are not available:`));
-        console.log(chalk.gray(ToolChecker.formatCheckResults(toolCheck)));
-      }
-
-      console.log(chalk.blue(`\n🔒 Running SAST security analysis...`));
-      try {
-        const fileContents = await Promise.all(
-          changedFiles.map(async (file) => {
-            const content = await this.git.getFileContent(file.path, targetBranch);
-            return { path: file.path, content };
-          })
-        );
-        const sastResult = await this.sastIntegration.analyze(fileContents);
-        const rawComments = this.sastIntegration.convertToReviewComments(sastResult);
-
-        // Filter false positives
-        const { filtered: filteredComments, stats: filterStats } =
-          this.falsePositiveFilter.filterReviewComments(rawComments);
-        sastComments = filteredComments;
-
-        console.log(
-          chalk.green(
-            `Found ${sastResult.summary.critical} critical, ${sastResult.summary.high} high, ${sastResult.summary.medium} medium, ${sastResult.summary.low} low severity issue(s) via SAST tools`
-          )
-        );
-        if (filterStats.filteredIssues > 0) {
-          console.log(
-            chalk.gray(
-              `   Filtered ${filterStats.filteredIssues} false positive(s) ` +
-                `(${Math.round(filterStats.filterRate * 100)}% reduction)`
-            )
-          );
-        }
-        if (sastResult.toolsUsed.length > 0) {
-          console.log(chalk.gray(`   Tools used: ${sastResult.toolsUsed.join(', ')}`));
-        }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(chalk.yellow(`⚠️  SAST analysis failed: ${errorMessage}`));
-      }
-    }
-
-    // Step 4: Review code with AI (with caching and batching)
-    console.log(chalk.blue(`\n🤖 Reviewing code with ${this.config.aiProvider}...`));
     console.log(
       chalk.gray(
         `Using ${chunksToReview.length} chunk(s) and ${this.config.globalRules.length} rule(s)`
       )
     );
 
+    // Step 4.2: Multi-Pass Review - Scout Pass
+    console.log(chalk.blue(`\n🔍 Running Scout Pass to identify complexity hotspots...`));
+    const { complexityScore, criticalFiles } = await this.aiProvider.scoutReview(chunksToReview);
+    console.log(
+      chalk.green(
+        `Scout finding: Complexity Score ${complexityScore}/10, ` +
+          `${criticalFiles.length} critical file(s) identified.`
+      )
+    );
+
+    // Filter or prioritize critical files if needed
+    if (complexityScore > 7) {
+      console.log(chalk.yellow('⚠️  High complexity detected. Escalating analysis depth.'));
+    }
+
     // Check cache first
     const cacheKey = this.reviewCache.generateCacheKey(chunksToReview);
-    let reviewResult = this.reviewCache.get(cacheKey);
+    let reviewResult: ReviewResult | undefined = this.reviewCache.get(cacheKey) || undefined;
 
     if (reviewResult) {
       console.log(chalk.green('✅ Using cached review results'));
@@ -465,30 +400,42 @@ export class PRReviewer {
 
       // Review batches in parallel
       if (batches.length > 1) {
+        const batchCount = batches.length;
+        let concurrency = this.config.parallel?.concurrency || 3;
+
+        // Adaptive concurrency: scale based on batch volume
+        if (batchCount > 10) {
+          concurrency = Math.min(concurrency * 2, 6);
+          console.log(chalk.gray(`🚀 High volume detected: scaling concurrency to ${concurrency}`));
+        }
+
         console.log(chalk.blue(`⚡ Processing ${batches.length} batches in parallel...`));
         reviewResult = await this.parallelReviewer.reviewBatches(
           batches,
           this.aiProvider,
           this.config.globalRules,
-          stream
+          stream,
+          criticalFiles
         );
-      } else {
+      } else if (chunksToReview.length > 0) {
         // Single batch - use regular review
         reviewResult = await this.aiProvider.reviewCode(chunksToReview, this.config.globalRules);
         if (stream) {
-          // Emit comments for single batch
           reviewResult.comments.forEach((comment) => stream.emitComment(comment));
           stream.batchComplete(0, reviewResult.comments, batches.length);
           stream.complete(reviewResult);
         }
+      } else {
+        reviewResult = this.createEmptyResult('No chunks to review.');
       }
 
       // Cache the result
-      this.reviewCache.set(cacheKey, reviewResult);
-      console.log(chalk.gray('💾 Cached review results for future use'));
+      if (reviewResult) {
+        this.reviewCache.set(cacheKey, reviewResult);
+        console.log(chalk.gray('💾 Cached review results for future use'));
+      }
     }
 
-    // Ensure reviewResult is not null
     if (!reviewResult) {
       throw new Error('Review result is null');
     }
@@ -515,16 +462,6 @@ export class PRReviewer {
 
     // Step 5.5: Prioritize comments (critical issues first)
     const prioritizedComments = this.commentPrioritizer.prioritizeComments(deduplicatedComments);
-    const priorityGroups = this.commentPrioritizer.groupByPriority(prioritizedComments);
-
-    if (priorityGroups.critical.length > 0) {
-      console.log(
-        chalk.red(
-          `🚨 Found ${priorityGroups.critical.length} critical issue(s) requiring immediate attention`
-        )
-      );
-    }
-
     const qualityMetrics = this.reviewQualityScorer.calculateQualityMetrics(
       {
         ...reviewResult,
@@ -536,38 +473,22 @@ export class PRReviewer {
 
     const mergedResult: ReviewResult = {
       ...reviewResult,
-      comments: prioritizedComments.map((c) => {
-        // Remove priority fields before returning (they're internal)
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { priority, priorityReason, ...comment } = c;
-        return comment;
-      }),
-      stats: {
-        errors: deduplicatedComments.filter((c) => c.severity === 'error').length,
-        warnings: deduplicatedComments.filter((c) => c.severity === 'warning').length,
-        suggestions: deduplicatedComments.filter(
-          (c) => c.severity === 'suggestion' || c.severity === 'info'
-        ).length,
-      },
+      comments: prioritizedComments.map((c: PrioritizedComment) => ({
+        file: c.file,
+        line: c.line,
+        body: c.body,
+        severity: c.severity,
+        rule: c.rule,
+        category: c.category,
+        fix: c.fix,
+        tool: c.tool,
+      })),
+      stats: this.calculateStats(deduplicatedComments),
       qualityMetrics,
     };
 
-    // Display quality metrics
-    if (qualityMetrics.overallScore > 0) {
-      console.log(
-        chalk.blue(
-          `📊 Review Quality Score: ${qualityMetrics.overallScore.toFixed(1)}/100 ` +
-            `(Accuracy: ${qualityMetrics.accuracy.toFixed(1)}%, ` +
-            `Actionability: ${qualityMetrics.actionability.toFixed(1)}%, ` +
-            `Coverage: ${qualityMetrics.coverage.toFixed(1)}%)`
-        )
-      );
-    }
-
-    // Step 6: Display all comments
+    // Step 6: Filter and Display
     this.displayAllComments(mergedResult);
-
-    // Step 7: Filter comments to changed lines
     const filteredResult = this.filterAndDisplayFilteredComments(
       mergedResult,
       changedFiles,
@@ -576,49 +497,28 @@ export class PRReviewer {
 
     // Step 7: Analyze naming and PR title
     console.log(chalk.blue(`\n📝 Analyzing naming conventions and PR title...`));
-
     const [namingSuggestions, prTitleSuggestion] = await Promise.all([
       this.namingAnalyzer.analyzeNaming(chunks),
       this.prTitleAnalyzer.analyzePRTitle(undefined, changedFiles, chunks),
     ]);
 
-    if (namingSuggestions.length > 0) {
-      console.log(chalk.green(`Found ${namingSuggestions.length} naming suggestion(s)`));
-    }
-
-    if (prTitleSuggestion) {
-      console.log(chalk.green(`PR title suggestion: ${prTitleSuggestion.suggestedTitle}`));
-    }
-
-    // Add suggestions to result
     const finalResult: ReviewResult = {
       ...filteredResult,
       namingSuggestions: namingSuggestions.length > 0 ? namingSuggestions : undefined,
       prTitleSuggestion: prTitleSuggestion || undefined,
     };
 
-    // Step 8: Post comments to PR
-    const postCommentsPromise: Promise<void> = this.postCommentsIfEnabled(
-      postComments,
-      finalResult
-    );
-    await postCommentsPromise;
-
-    // Step 8.5: Post review decision (CodeRabbit-like feature)
+    // Step 8: Post comments
+    await this.postCommentsIfEnabled(postComments, finalResult);
     if (postComments && this.config.pr?.number) {
       await this.postReviewDecision(finalResult, this.config.pr.number);
     }
 
-    // Step 9: Mark chunks as reviewed (for incremental reviews)
+    // Step 9: Mark as reviewed
     if (this.reviewTracker && chunksToReview.length > 0) {
-      const commentsForTracking = filteredResult.comments.map((c) => ({
-        file: c.file,
-        line: c.line,
-        body: c.body,
-      }));
       this.reviewTracker.markAsReviewed(
         chunksToReview,
-        commentsForTracking,
+        filteredResult.comments.map((c) => ({ file: c.file, line: c.line, body: c.body })),
         targetBranch,
         baseBranch
       );
@@ -629,10 +529,6 @@ export class PRReviewer {
 
   /**
    * Review a specific file
-   * @param filePath - Path to the file
-   * @param branch - Branch name
-   * @param startLine - Optional start line
-   * @param endLine - Optional end line
    */
   async reviewFile(
     filePath: string,
@@ -642,20 +538,10 @@ export class PRReviewer {
   ): Promise<ReviewResult> {
     console.log(chalk.blue(`📋 Reviewing file: ${filePath}`));
 
-    const chunksPromise: Promise<CodeChunk[]> = this.getFileChunks(
-      filePath,
-      branch,
-      startLine,
-      endLine
-    );
-    const chunks = await chunksPromise;
+    const chunks = await this.getFileChunks(filePath, branch, startLine, endLine);
     console.log(chalk.green(`Generated ${chunks.length} code chunk(s)`));
 
-    const reviewCodePromise: Promise<ReviewResult> = this.aiProvider.reviewCode(
-      chunks,
-      this.config.globalRules
-    );
-    const reviewResult = await reviewCodePromise;
+    const reviewResult = await this.aiProvider.reviewCode(chunks, this.config.globalRules);
     this.displayReviewSummary(reviewResult);
 
     return reviewResult;
@@ -697,8 +583,16 @@ export class PRReviewer {
     if (groups.critical.length > 0) {
       console.log(chalk.red(`\n🚨 Critical Issues (${groups.critical.length}):`));
       groups.critical.forEach((comment) => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { priority, priorityReason, ...displayComment } = comment;
+        const displayComment: ReviewComment = {
+          file: comment.file,
+          line: comment.line,
+          body: comment.body,
+          severity: comment.severity,
+          rule: comment.rule,
+          category: comment.category,
+          fix: comment.fix,
+          tool: comment.tool,
+        };
         this.displayComment(displayComment, displayIndex++);
       });
     }
@@ -707,8 +601,16 @@ export class PRReviewer {
     if (groups.high.length > 0) {
       console.log(chalk.yellow(`\n⚠️  High Priority (${groups.high.length}):`));
       groups.high.forEach((comment) => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { priority, priorityReason, ...displayComment } = comment;
+        const displayComment: ReviewComment = {
+          file: comment.file,
+          line: comment.line,
+          body: comment.body,
+          severity: comment.severity,
+          rule: comment.rule,
+          category: comment.category,
+          fix: comment.fix,
+          tool: comment.tool,
+        };
         this.displayComment(displayComment, displayIndex++);
       });
     }
@@ -718,8 +620,16 @@ export class PRReviewer {
     if (remaining.length > 0) {
       console.log(chalk.gray(`\n💡 Other Issues (${remaining.length}):`));
       remaining.forEach((comment) => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { priority, priorityReason, ...displayComment } = comment;
+        const displayComment: ReviewComment = {
+          file: comment.file,
+          line: comment.line,
+          body: comment.body,
+          severity: comment.severity,
+          rule: comment.rule,
+          category: comment.category,
+          fix: comment.fix,
+          tool: comment.tool,
+        };
         this.displayComment(displayComment, displayIndex++);
       });
     }
@@ -749,7 +659,7 @@ export class PRReviewer {
   // Private Methods - Filtering
   // ============================================================================
 
-  private filterAndDisplayFilteredComments(
+  protected filterAndDisplayFilteredComments(
     reviewResult: ReviewResult,
     changedFiles: ChangedFile[],
     chunks: CodeChunk[]
@@ -775,15 +685,6 @@ export class PRReviewer {
         `Filtered from ${reviewResult.comments.length} to ${filteredComments.length} comment(s) on changed lines/functions`
       )
     );
-
-    if (reviewResult.comments.length > filteredComments.length) {
-      const filteredOut = reviewResult.comments.length - filteredComments.length;
-      console.log(
-        chalk.yellow(
-          `   ⚠️  ${filteredOut} comment(s) were outside changed functions and will not be posted to PR`
-        )
-      );
-    }
 
     this.displayFilteredResults(filteredResult, filteredComments);
 
@@ -885,10 +786,6 @@ export class PRReviewer {
     return map;
   }
 
-  // ============================================================================
-  // Private Methods - Stats
-  // ============================================================================
-
   private calculateStats(comments: ReviewComment[]): ReviewStats {
     return {
       errors: comments.filter((c) => c.severity === 'error').length,
@@ -897,10 +794,6 @@ export class PRReviewer {
         .length,
     };
   }
-
-  // ============================================================================
-  // Private Methods - Result Creation
-  // ============================================================================
 
   private createEmptyResult(message: string): ReviewResult {
     console.log(chalk.yellow(message));
@@ -915,10 +808,6 @@ export class PRReviewer {
     };
   }
 
-  // ============================================================================
-  // Private Methods - File Operations
-  // ============================================================================
-
   private async getFileChunks(
     filePath: string,
     branch: string,
@@ -927,23 +816,11 @@ export class PRReviewer {
   ): Promise<CodeChunk[]> {
     if (startLine !== undefined && endLine !== undefined) {
       console.log(chalk.blue(`Using range ${startLine}-${endLine}`));
-      const chunkFileByRangePromise: Promise<CodeChunk> = this.chunker.chunkFileByRange(
-        filePath,
-        startLine,
-        endLine,
-        branch
-      );
-      const chunk = await chunkFileByRangePromise;
-      return [chunk];
+      return [await this.chunker.chunkFileByRange(filePath, startLine, endLine, branch)];
     }
 
-    const chunkFilePromise: Promise<CodeChunk[]> = this.chunker.chunkFile(filePath, branch);
-    return await chunkFilePromise;
+    return await this.chunker.chunkFile(filePath, branch);
   }
-
-  // ============================================================================
-  // Private Methods - Comment Posting
-  // ============================================================================
 
   private async postCommentsIfEnabled(postComments: boolean, result: ReviewResult): Promise<void> {
     if (!postComments) {
@@ -979,9 +856,6 @@ export class PRReviewer {
     await this.postReviewDecision(result, prNumber);
   }
 
-  /**
-   * Post review decision (approve/request changes/comment)
-   */
   private async postReviewDecision(result: ReviewResult, prNumber: number): Promise<void> {
     try {
       // Determine decision based on review results
@@ -1006,15 +880,133 @@ export class PRReviewer {
   }
 
   /**
-   * Get cache statistics
+   * Run linter analysis in parallel
    */
+  private async runLinterParallel(
+    changedFiles: ChangedFile[],
+    targetBranch: string
+  ): Promise<ReviewComment[]> {
+    if (
+      !this.linterIntegration ||
+      !this.config.linter?.enabled ||
+      !this.config.linter.tools ||
+      this.config.linter.tools.length === 0
+    ) {
+      return [];
+    }
+
+    try {
+      const toolCheck = await ToolChecker.checkLinterTools(this.config.linter.tools);
+      if (!toolCheck.allAvailable && toolCheck.missing.length > 0) {
+        console.log(chalk.yellow(`\n⚠️  Some linter tools are not available:`));
+        console.log(chalk.gray(ToolChecker.formatCheckResults(toolCheck)));
+      }
+
+      console.log(chalk.blue(`\n🔧 Running linters...`));
+      const fileContents = await Promise.all(
+        changedFiles.map(async (file) => {
+          const content = await this.git.getFileContent(file.path, targetBranch);
+          return { path: file.path, content };
+        })
+      );
+
+      const linterResult = await this.linterIntegration.analyze(fileContents);
+      const rawComments = this.linterIntegration.convertToReviewComments(linterResult);
+
+      const { filtered: filteredComments, stats: filterStats } =
+        this.falsePositiveFilter.filterReviewComments(rawComments);
+
+      console.log(
+        chalk.green(
+          `Found ${linterResult.summary.errors} error(s), ${linterResult.summary.warnings} warning(s), ${linterResult.summary.suggestions} suggestion(s) via linters`
+        )
+      );
+      if (filterStats.filteredIssues > 0) {
+        console.log(
+          chalk.gray(
+            `   Filtered ${filterStats.filteredIssues} false positive(s) ` +
+              `(${Math.round(filterStats.filterRate * 100)}% reduction)`
+          )
+        );
+      }
+
+      return filteredComments;
+    } catch (error) {
+      console.warn(
+        chalk.yellow(
+          `⚠️  Linter analysis failed: ${error instanceof Error ? error.message : String(error)}`
+        )
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Run SAST analysis in parallel
+   */
+  private async runSASTParallel(
+    changedFiles: ChangedFile[],
+    targetBranch: string
+  ): Promise<ReviewComment[]> {
+    if (
+      !this.sastIntegration ||
+      !this.config.sast?.enabled ||
+      !this.config.sast.tools ||
+      this.config.sast.tools.length === 0
+    ) {
+      return [];
+    }
+
+    try {
+      const toolCheck = await ToolChecker.checkSASTTools(this.config.sast.tools);
+      if (!toolCheck.allAvailable && toolCheck.missing.length > 0) {
+        console.log(chalk.yellow(`\n⚠️  Some SAST tools are not available:`));
+        console.log(chalk.gray(ToolChecker.formatCheckResults(toolCheck)));
+      }
+
+      console.log(chalk.blue(`\n🔒 Running SAST security analysis...`));
+      const fileContents = await Promise.all(
+        changedFiles.map(async (file) => {
+          const content = await this.git.getFileContent(file.path, targetBranch);
+          return { path: file.path, content };
+        })
+      );
+
+      const sastResult = await this.sastIntegration.analyze(fileContents);
+      const rawComments = this.sastIntegration.convertToReviewComments(sastResult);
+
+      const { filtered: filteredComments, stats: filterStats } =
+        this.falsePositiveFilter.filterReviewComments(rawComments);
+
+      console.log(
+        chalk.green(
+          `Found ${sastResult.summary.critical} critical, ${sastResult.summary.high} high, ${sastResult.summary.medium} medium, ${sastResult.summary.low} low severity issue(s) via SAST tools`
+        )
+      );
+      if (filterStats.filteredIssues > 0) {
+        console.log(
+          chalk.gray(
+            `   Filtered ${filterStats.filteredIssues} false positive(s) ` +
+              `(${Math.round(filterStats.filterRate * 100)}% reduction)`
+          )
+        );
+      }
+
+      return filteredComments;
+    } catch (error) {
+      console.warn(
+        chalk.yellow(
+          `⚠️  SAST analysis failed: ${error instanceof Error ? error.message : String(error)}`
+        )
+      );
+      return [];
+    }
+  }
+
   getCacheStats(): ReturnType<ReviewCache['getStats']> {
     return this.reviewCache.getStats();
   }
 
-  /**
-   * Clear review cache
-   */
   clearCache(): void {
     this.reviewCache.clear();
   }

@@ -14,10 +14,10 @@ export {
 
 // Ollama Provider exports (Local LLM)
 export {
-  createOllamaProvider,
-  isOllamaRunning,
   OllamaProvider,
   RECOMMENDED_MODELS,
+  createOllamaProvider,
+  isOllamaRunning,
 } from './ai-provider/ollama-provider';
 export type { OllamaConfig } from './ai-provider/ollama-provider';
 
@@ -31,10 +31,11 @@ export {
 
 // Conversation exports
 export {
-  buildContextFromWebhook,
   ChatHandler,
   CodeExplainer,
   CommandParser,
+  TestGenerator,
+  buildContextFromWebhook,
   createChatHandler,
   createCodeExplainer,
   createParser,
@@ -43,7 +44,6 @@ export {
   formatExplanationAsMarkdown,
   formatTestsAsMarkdown,
   hasSherlockCommand,
-  TestGenerator,
 } from './conversation';
 export type {
   ChatHandlerOptions,
@@ -57,30 +57,30 @@ export type {
 
 // Feedback exports
 export {
-  createDiagramGenerator,
-  createSummaryBuilder,
   DiagramGenerator,
   SummaryBuilder,
+  createDiagramGenerator,
+  createSummaryBuilder,
 } from './feedback';
 
 // Auto-Fix exports
 export {
   AutoFix,
+  FixApplier,
+  FixGenerator,
   createAutoFix,
   createDefaultAutoFix,
   createFixApplier,
   createFixGenerator,
-  FixApplier,
-  FixGenerator,
 } from './autofix';
 export type { AutoFixOptions } from './autofix';
 
 // Analyzers exports
 export {
-  createPerformanceAnalyzer,
-  createSecurityAnalyzer,
   PerformanceAnalyzer,
   SecurityAnalyzer,
+  createPerformanceAnalyzer,
+  createSecurityAnalyzer,
 } from './analyzers';
 export type {
   PerformanceAnalysisResult,
@@ -94,6 +94,8 @@ export type {
   SecurityIssueType,
   SecurityPattern,
 } from './analyzers';
+export { CodegraphAnalyzer, createCodegraphAnalyzer } from './analyzers/codegraph-analyzer';
+export type { CodegraphOptions, ImpactAnalysis } from './analyzers/codegraph-analyzer';
 
 // Type exports
 export type {
@@ -111,6 +113,7 @@ export type {
   ClaudeConfig,
   // Code types
   CodeChunk,
+  CodeIndexer,
   CodeSuggestion,
   CommandContext,
   CommandHandler,
@@ -120,6 +123,7 @@ export type {
   // Config types
   Config,
   DefaultConfig,
+  DependencyExtraction,
   DiagramOptions,
   DiagramType,
   DiffHunk,
@@ -132,19 +136,19 @@ export type {
   GitHubConfig,
   GitHubPRWebhookPayload,
   GitLabConfig,
+  GitLabMRWebhookPayload,
   GitLabMergeRequest,
   GitLabMergeRequestDiffRefs,
-  GitLabMRWebhookPayload,
   GitLabNoteWebhookPayload,
   // Utility types
   LineRange,
   NormalizedWebhookEvent,
   OpenAIConfig,
-  ParsedCommand,
   PRConfig,
   PRStats,
   PRSummary,
   PRWalkthrough,
+  ParsedCommand,
   RepositoryConfig,
   ReviewComment,
   ReviewMetadata,
@@ -156,6 +160,7 @@ export type {
   Severity,
   SummaryOptions,
   SummaryRecommendation,
+  SymbolExtraction,
   WalkthroughSection,
   WebhookHandler,
   WebhookPlatform,
@@ -175,11 +180,13 @@ export {
   AIProviderSchema,
   ClaudeConfigSchema,
   ConfigSchema,
+  DependencyExtractionSchema,
   GitHubConfigSchema,
   GitLabConfigSchema,
   OpenAIConfigSchema,
   PRConfigSchema,
   RepositoryConfigSchema,
+  SymbolExtractionSchema,
 } from './types';
 
 // Type guard exports
@@ -187,3 +194,6 @@ export { isAIIssue, isAIReviewResponse } from './types';
 
 // Command constants
 export { COMMAND_HELP, COMMAND_PREFIX, CommandType as CommandTypes } from './types/commands';
+
+// Indexer Client
+export { IndexerClient, createIndexerClient } from './utils/indexer-client';

@@ -4,18 +4,18 @@
  * Uses AI and pattern matching to suggest fixes
  */
 
+import { ReviewComment, Severity } from '../types';
 import {
   CodeFix,
-  FixSuggestion,
-  FixGeneratorOptions,
+  COMMON_FIX_PATTERNS,
+  DEFAULT_FIX_OPTIONS,
+  FixConfidence,
   FixGenerationContext,
   FixGenerationResult,
   FixGenerationStats,
-  FixConfidence,
-  COMMON_FIX_PATTERNS,
-  DEFAULT_FIX_OPTIONS,
+  FixGeneratorOptions,
+  FixSuggestion,
 } from '../types/autofix';
-import { ReviewComment, Severity } from '../types';
 
 export class FixGenerator {
   private options: FixGeneratorOptions;
@@ -114,7 +114,7 @@ export class FixGenerator {
     targetLine: string,
     language: string
   ): FixSuggestion | null {
-    const category = (comment as unknown as { category?: string }).category?.toLowerCase() || '';
+    const category = comment.category?.toLowerCase() || '';
     const message = comment.body.toLowerCase();
 
     for (const pattern of COMMON_FIX_PATTERNS) {
@@ -343,17 +343,17 @@ export class FixGenerator {
     if (/^['"`]/.test(trimmed)) return 'string';
     if (/^\d+$/.test(trimmed)) return 'number';
     if (/^\d+\.\d+$/.test(trimmed)) return 'number';
-    if (trimmed.startsWith('[')) return 'unknown[]';
-    if (trimmed.startsWith('{')) return 'Record<string, unknown>';
+    if (trimmed.startsWith('[')) return 'Array<string | number>';
+    if (trimmed.startsWith('{')) return 'Record<string, string | number>';
     if (trimmed === 'null') return 'null';
     if (trimmed === 'undefined') return 'undefined';
-    if (trimmed.includes('=>')) return '() => unknown';
+    if (trimmed.includes('=>')) return '() => void';
     if (trimmed.startsWith('new ')) {
       const match = trimmed.match(/new\s+(\w+)/);
-      return match && match[1] ? match[1] : 'unknown';
+      return match && match[1] ? match[1] : 'object';
     }
 
-    return 'unknown';
+    return 'string';
   }
 
   /**

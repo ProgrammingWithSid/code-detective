@@ -50,22 +50,26 @@ const SYSTEM_PROMPT = `You are an Expert Senior Software Engineer & Code Reviewe
 
 Your job is to analyze provided code and return a fully structured PR review.
 
-You MUST return ONLY valid JSON. No markdown. No explanations outside JSON.
-
----
+## Reasoning Process (Chain-of-Thought)
+Before providing the final JSON, you MUST internalize the following:
+1. **Analyze Context**: Understand what this code does and its role in the system.
+2. **Trace Dependencies**: Consider how changes might affect call-sites or dependent modules.
+3. **Identify Side Effects**: Look for hidden implications (e.g., race conditions, memory leaks, breaking API changes).
+4. **Evaluate Severity**: Only report issues that truly matter. Avoid bikeshedding.
 
 ## JSON OUTPUT SCHEMA (MANDATORY)
-
 Your final answer MUST be a JSON object matching exactly this shape:
 
 {
+  "reasoning": "A brief summary of your internal analysis and chain-of-thought",
   "bugs": [
     {
       "severity": "Critical | High | Medium | Low | Nitpick",
       "file": "path/to/file",
       "line": 0,
       "description": "string",
-      "fix": "string"
+      "fix": "string",
+      "impact_analysis": "Predicted side effects of this bug or its fix"
     }
   ],
   "security": [... same structure ...],
@@ -74,7 +78,9 @@ Your final answer MUST be a JSON object matching exactly this shape:
   "architecture": [... same structure ...],
   "summary": {
     "recommendation": "BLOCK | REQUEST_CHANGES | APPROVE_WITH_NITS | APPROVE",
-    "top_issues": ["string", "string"]
+    "top_issues": ["string", "string"],
+    "complexity_score": 0-10,
+    "critical_files": ["string"]
   }
 }
 
@@ -82,54 +88,11 @@ If a category has no issues, return an empty array.
 
 ---
 
-## Categories You MUST Detect
-
-Bugs:
-- Logic errors
-- Runtime issues
-- Incorrect async/state handling
-- Edge cases
-
-Security:
-- Injection vulnerabilities
-- Hardcoded secrets
-- Unsafe eval/new Function
-- Authentication flaws
-- Unsafe API usage
-
-Performance:
-- N+1 queries
-- Inefficient loops
-- Heavy operations repeated
-- Unnecessary re-renders
-- Blocking I/O
-
-Code Quality:
-- Anti-patterns
-- Code smells
-- Missing null checks
-- Poor naming
-- Duplicated logic
-
-Architecture:
-- Tight coupling
-- Missing validation
-- Weak contracts
-- Bad error-handling
-- Leaky abstractions
-
-Memory Leaks:
-- Memory leaks
-
----
-
 ## Rules
-
-- Do NOT hallucinate file names or line numbers — only use what's provided.
+- Do NOT hallucinate file names or line numbers.
 - Do NOT output anything except valid JSON.
-- Do NOT wrap JSON in backticks or markdown.
 - Every issue MUST include: severity, file, line, description, fix.
-- Be thorough and accurate.`;
+- Focus on accuracy and actionable feedback.`;
 
 // ============================================================================
 // Interfaces
@@ -137,6 +100,8 @@ Memory Leaks:
 
 export interface AIProviderInterface {
   reviewCode(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult>;
+  deepDiveReview(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult>;
+  scoutReview(chunks: CodeChunk[]): Promise<{ complexityScore: number; criticalFiles: string[] }>;
 }
 
 // ============================================================================
@@ -155,6 +120,49 @@ abstract class BaseAIProvider implements AIProviderInterface {
   }
 
   abstract reviewCode(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult>;
+
+  async deepDiveReview(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult> {
+    // For now, deep dive uses the same implementation but can be overridden
+    // or use a more descriptive prompt prefix.
+    const deepInstructions = [
+      ...globalRules,
+      'CRITICAL: Perform an exhaustive deep-dive analysis of this code.',
+      'Trace all data flows and identify subtle race conditions or edge cases.',
+    ];
+    return this.reviewCode(chunks, deepInstructions);
+  }
+
+  async scoutReview(
+    chunks: CodeChunk[]
+  ): Promise<{ complexityScore: number; criticalFiles: string[] }> {
+    const prompt = `Perform a high-level scout review of these code chunks.
+Identify complexity hotspots and critical files that need deep-dive analysis.
+Return ONLY JSON: { "complexityScore": 0-10, "criticalFiles": ["file1", "file2"] }
+
+Chunks:
+${chunks.map((c) => `- ${c.file} (${c.type}): ${c.name}`).join('\n')}`;
+
+    try {
+      const response = await this.callAI(prompt, 'You are a high-speed complexity analyzer.');
+      const jsonStr = this.extractJSON(response);
+      const parsed = JSON.parse(jsonStr) as {
+        complexityScore: number;
+        criticalFiles: string[];
+      };
+      return {
+        complexityScore: parsed.complexityScore || 0,
+        criticalFiles: parsed.criticalFiles || [],
+      };
+    } catch (error) {
+      console.warn('Scout review failed, falling back to all files:', error);
+      return {
+        complexityScore: 5,
+        criticalFiles: Array.from(new Set(chunks.map((c) => c.file))),
+      };
+    }
+  }
+
+  protected abstract callAI(prompt: string, systemPrompt?: string): Promise<string>;
 
   protected buildPrompt(chunks: CodeChunk[], globalRules: string[]): string {
     if (this.useContextAwarePrompts) {
@@ -226,7 +234,7 @@ abstract class BaseAIProvider implements AIProviderInterface {
   protected parseResponse(content: string, chunks: CodeChunk[]): ReviewResult {
     try {
       const jsonStr = this.extractJSON(content);
-      const parsed: unknown = JSON.parse(jsonStr);
+      const parsed = JSON.parse(jsonStr) as Partial<AIReviewResponse>;
 
       if (!isAIReviewResponse(parsed)) {
         return this.createFallbackResult(content, chunks);
@@ -355,18 +363,21 @@ export class OpenAIProvider extends BaseAIProvider {
 
   async reviewCode(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult> {
     const prompt = this.buildPrompt(chunks, globalRules);
+    const content = await this.callAI(prompt, SYSTEM_PROMPT);
+    return this.parseResponse(content, chunks);
+  }
 
+  protected async callAI(prompt: string, systemPrompt: string = SYSTEM_PROMPT): Promise<string> {
     try {
       const response = await this.client.chat.completions.create({
         model: this.model,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt },
         ],
       });
 
-      const content = response.choices[0]?.message?.content ?? '';
-      return this.parseResponse(content, chunks);
+      return response.choices[0]?.message?.content ?? '';
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       throw new AIProviderError(
@@ -391,24 +402,75 @@ export class ClaudeProvider extends BaseAIProvider {
 
   async reviewCode(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult> {
     const prompt = this.buildPrompt(chunks, globalRules);
+    const content = await this.callAI(prompt, SYSTEM_PROMPT);
+    return this.parseResponse(content, chunks);
+  }
 
+  protected async callAI(prompt: string, systemPrompt: string = SYSTEM_PROMPT): Promise<string> {
     try {
       const response = await this.client.messages.create({
         model: this.model,
         max_tokens: 4096,
-        system: SYSTEM_PROMPT,
+        system: systemPrompt,
         messages: [{ role: 'user', content: prompt }],
       });
 
       const firstContent = response.content[0];
-      const content = firstContent?.type === 'text' ? firstContent.text : '';
-      return this.parseResponse(content, chunks);
+      return firstContent?.type === 'text' ? firstContent.text : '';
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       throw new AIProviderError(
         `Claude API call failed: ${errorMessage}`,
         error instanceof Error ? error : undefined
       );
+    }
+  }
+}
+
+// ============================================================================
+// Ollama Provider
+// ============================================================================
+
+export class OllamaProvider extends BaseAIProvider {
+  private baseUrl: string;
+
+  constructor(model: string, baseUrl: string = 'http://localhost:11434') {
+    super(model);
+    this.baseUrl = baseUrl;
+  }
+
+  async reviewCode(chunks: CodeChunk[], globalRules: string[]): Promise<ReviewResult> {
+    const prompt = this.buildPrompt(chunks, globalRules);
+    const content = await this.callAI(prompt, SYSTEM_PROMPT);
+    return this.parseResponse(content, chunks);
+  }
+
+  protected async callAI(prompt: string, systemPrompt: string = SYSTEM_PROMPT): Promise<string> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          prompt,
+          system: systemPrompt,
+          stream: false,
+          options: {
+            temperature: 0.1,
+            num_predict: 4096,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.status}`);
+      }
+
+      const data = (await response.json()) as { response: string };
+      return data.response;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new AIProviderError(`Ollama API call failed: ${errorMessage}`);
     }
   }
 }
@@ -431,6 +493,9 @@ export class AIProviderFactory {
           throw new AIProviderError('Claude API key is required');
         }
         return new ClaudeProvider(config.claude.apiKey, config.claude.model);
+
+      case 'ollama':
+        return new OllamaProvider(config.ollama?.model || 'codellama', config.ollama?.baseUrl);
 
       default: {
         const provider: never = config.aiProvider;

@@ -1,77 +1,94 @@
 import { AIProviderInterface } from '../ai-provider';
-import { CodeChunk, ReviewComment, ReviewResult } from '../types';
-import type { ReviewStream } from './review-stream';
+import { CodeChunk, ReviewResult } from '../types';
+import { ReviewStream } from './review-stream';
 
-/**
- * Configuration for parallel review processing
- */
-export interface ParallelReviewConfig {
-  /** Maximum concurrent batches */
+export interface ParallelReviewerConfig {
   concurrency: number;
-  /** Timeout per batch in milliseconds */
   timeout: number;
 }
 
-/**
- * Default parallel review configuration
- */
-const DEFAULT_CONFIG: ParallelReviewConfig = {
+const DEFAULT_CONFIG: ParallelReviewerConfig = {
   concurrency: 3,
-  timeout: 60000, // 60 seconds
+  timeout: 120000, // 2 minutes
 };
 
 /**
- * Parallel reviewer for processing multiple batches concurrently
+ * Parallel Reviewer - Manages concurrent AI review batches
  */
 export class ParallelReviewer {
-  private config: ParallelReviewConfig;
+  private config: ParallelReviewerConfig;
 
-  constructor(config: Partial<ParallelReviewConfig> = {}) {
+  constructor(config: Partial<ParallelReviewerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
   /**
-   * Review batches in parallel
+   * Review batches in parallel with a sliding window concurrency model
    */
   async reviewBatches(
     batches: CodeChunk[][],
     aiProvider: AIProviderInterface,
     globalRules: string[],
-    stream?: ReviewStream | undefined
+    stream?: ReviewStream | undefined,
+    criticalFiles: string[] = []
   ): Promise<ReviewResult> {
-    const results: ReviewResult[] = [];
+    const results: ReviewResult[] = new Array<ReviewResult>(batches.length);
+    let activeCount = 0;
+    let nextIndex = 0;
 
-    // Process batches in parallel with concurrency limit
-    for (let i = 0; i < batches.length; i += this.config.concurrency) {
-      const batchGroup = batches.slice(i, i + this.config.concurrency);
-
-      const batchResults = await Promise.all(
-        batchGroup.map((batch) => this.reviewBatchWithTimeout(batch, aiProvider, globalRules))
-      );
-
-      // Emit batch completion for streaming
-      if (stream) {
-        for (let j = 0; j < batchResults.length; j++) {
-          const batchIndex = i + j;
-          const batchResult = batchResults[j];
-          if (batchResult) {
-            const batchComments = batchResult.comments;
-            stream.batchComplete(batchIndex, batchComments, batches.length);
-            // Emit individual comments
-            batchComments.forEach((comment) => stream.emitComment(comment));
-          }
-        }
+    return new Promise((resolve) => {
+      if (batches.length === 0) {
+        resolve(this.createEmptyResult('No batches to review'));
+        return;
       }
 
-      results.push(...batchResults);
-    }
+      const startNextBatch = (): void => {
+        if (nextIndex >= batches.length) {
+          if (activeCount === 0) {
+            const merged = this.mergeResults(results.filter(Boolean));
+            if (stream) {
+              stream.complete(merged);
+            }
+            resolve(merged);
+          }
+          return;
+        }
 
-    // Merge results
-    const merged = this.mergeResults(results);
-    if (stream) {
-      stream.complete(merged);
-    }
-    return merged;
+        const currentIndex = nextIndex++;
+        const batch = batches[currentIndex];
+        if (!batch) return;
+
+        activeCount++;
+
+        const isDeepDive = batch.some((chunk) => criticalFiles.includes(chunk.file));
+
+        this.reviewBatchWithTimeout(batch, aiProvider, globalRules, isDeepDive)
+          .then((batchResult) => {
+            results[currentIndex] = batchResult;
+
+            if (stream) {
+              stream.batchComplete(currentIndex, batchResult.comments, batches.length);
+              batchResult.comments.forEach((comment) => stream.emitComment(comment));
+            }
+          })
+          .catch((error) => {
+            console.error(`Batch ${currentIndex} failed:`, error);
+            results[currentIndex] = this.createEmptyResult(
+              error instanceof Error ? error.message : 'Unknown error'
+            );
+          })
+          .finally(() => {
+            activeCount--;
+            startNextBatch();
+          });
+      };
+
+      // Start initial batches up to concurrency limit
+      const initialBatchCount = Math.min(this.config.concurrency, batches.length);
+      for (let i = 0; i < initialBatchCount; i++) {
+        startNextBatch();
+      }
+    });
   }
 
   /**
@@ -80,140 +97,105 @@ export class ParallelReviewer {
   private async reviewBatchWithTimeout(
     batch: CodeChunk[],
     aiProvider: AIProviderInterface,
-    globalRules: string[]
+    globalRules: string[],
+    isDeepDive: boolean = false
   ): Promise<ReviewResult> {
-    const timeoutPromise = new Promise<ReviewResult>((_, reject) => {
-      setTimeout(() => reject(new Error('Review timeout')), this.config.timeout);
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        resolve(this.createEmptyResult('Review timed out'));
+      }, this.config.timeout);
+
+      const reviewPromise = isDeepDive
+        ? aiProvider.deepDiveReview(batch, globalRules)
+        : aiProvider.reviewCode(batch, globalRules);
+
+      reviewPromise
+        .then((result) => {
+          clearTimeout(timeoutId);
+          resolve(result);
+        })
+        .catch((error) => {
+          clearTimeout(timeoutId);
+          resolve(this.createEmptyResult(error instanceof Error ? error.message : 'Unknown error'));
+        });
     });
-
-    const reviewPromise = aiProvider.reviewCode(batch, globalRules);
-
-    try {
-      return await Promise.race([reviewPromise, timeoutPromise]);
-    } catch (error) {
-      // Return empty result on timeout or error
-      return this.createEmptyResult(error instanceof Error ? error.message : 'Unknown error');
-    }
   }
 
   /**
    * Merge multiple review results into one
    */
   private mergeResults(results: ReviewResult[]): ReviewResult {
-    const merged: ReviewResult = {
+    const combined: ReviewResult = {
       comments: [],
       summary: '',
       stats: { errors: 0, warnings: 0, suggestions: 0 },
-      recommendation: 'APPROVE',
       topIssues: [],
     };
 
-    // Collect all comments
+    const summaries: string[] = [];
+
     for (const result of results) {
-      merged.comments.push(...result.comments);
-      merged.stats.errors += result.stats.errors;
-      merged.stats.warnings += result.stats.warnings;
-      merged.stats.suggestions += result.stats.suggestions;
-    }
+      combined.comments.push(...result.comments);
+      combined.stats.errors += result.stats.errors;
+      combined.stats.warnings += result.stats.warnings;
+      combined.stats.suggestions += result.stats.suggestions;
 
-    // Deduplicate comments
-    merged.comments = this.deduplicateComments(merged.comments);
+      if (result.summary) {
+        summaries.push(result.summary);
+      }
 
-    // Build summary
-    merged.summary = this.buildSummary(merged);
-    merged.recommendation = this.determineRecommendation(merged.stats);
-
-    // Extract top issues
-    merged.topIssues = this.extractTopIssues(merged.comments);
-
-    return merged;
-  }
-
-  /**
-   * Deduplicate comments based on file, line, and message
-   */
-  private deduplicateComments(comments: ReviewComment[]): ReviewComment[] {
-    const seen = new Set<string>();
-    const unique: ReviewComment[] = [];
-
-    for (const comment of comments) {
-      const key = `${comment.file}:${comment.line}:${comment.body.substring(0, 50)}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        unique.push(comment);
+      if (result.topIssues) {
+        combined.topIssues?.push(...result.topIssues);
       }
     }
 
-    return unique;
+    // Deduplicate comments
+    const uniqueComments = new Map<string, (typeof combined.comments)[number]>();
+    for (const comment of combined.comments) {
+      const key = `${comment.file}:${comment.line}:${comment.body}`;
+      uniqueComments.set(key, comment);
+    }
+    combined.comments = Array.from(uniqueComments.values());
+
+    // Determine recommendation based on merged stats
+    if (combined.stats.errors > 0) {
+      combined.recommendation = 'BLOCK';
+    } else if (combined.stats.warnings > 3) {
+      combined.recommendation = 'REQUEST_CHANGES';
+    } else if (combined.stats.warnings > 0) {
+      combined.recommendation = 'APPROVE_WITH_NITS';
+    } else {
+      combined.recommendation = 'APPROVE';
+    }
+
+    // Extract top issues from comments if none provided by batches
+    if ((!combined.topIssues || combined.topIssues.length === 0) && combined.comments.length > 0) {
+      combined.topIssues = combined.comments
+        .filter((c) => c.severity === 'error' || c.severity === 'warning')
+        .slice(0, 5)
+        .map((c) => `${c.severity.toUpperCase()}: ${c.body.split('\n')[0]}`);
+    }
+
+    // Deduplicate top issues
+    if (combined.topIssues) {
+      combined.topIssues = Array.from(new Set(combined.topIssues));
+    }
+
+    // Combine summaries
+    combined.summary =
+      summaries.length > 0 ? summaries.join('\n\n---\n\n') : 'No summaries available';
+
+    return combined;
   }
 
   /**
-   * Build summary from merged results
-   */
-  private buildSummary(result: ReviewResult): string {
-    const totalIssues = result.stats.errors + result.stats.warnings + result.stats.suggestions;
-
-    if (totalIssues === 0) {
-      return '✅ No issues found. Code looks good!';
-    }
-
-    const parts: string[] = [];
-    if (result.stats.errors > 0) {
-      parts.push(`${result.stats.errors} error(s)`);
-    }
-    if (result.stats.warnings > 0) {
-      parts.push(`${result.stats.warnings} warning(s)`);
-    }
-    if (result.stats.suggestions > 0) {
-      parts.push(`${result.stats.suggestions} suggestion(s)`);
-    }
-
-    return `Found ${parts.join(', ')}.`;
-  }
-
-  /**
-   * Determine overall recommendation based on stats
-   */
-  private determineRecommendation(stats: ReviewResult['stats']): string {
-    if (stats.errors > 0) {
-      return 'BLOCK';
-    }
-    if (stats.warnings > 5) {
-      return 'REQUEST_CHANGES';
-    }
-    if (stats.warnings > 0 || stats.suggestions > 0) {
-      return 'APPROVE_WITH_NITS';
-    }
-    return 'APPROVE';
-  }
-
-  /**
-   * Extract top issues from comments
-   */
-  private extractTopIssues(comments: ReviewComment[]): string[] {
-    // Sort by severity (error > warning > suggestion)
-    const severityOrder = { error: 3, warning: 2, suggestion: 1, info: 0 };
-    const sorted = [...comments].sort(
-      (a, b) => (severityOrder[b.severity] || 0) - (severityOrder[a.severity] || 0)
-    );
-
-    // Extract top 5 issues
-    return sorted.slice(0, 5).map((c) => {
-      const preview = c.body.substring(0, 100);
-      return `${c.file}:${c.line} - ${preview}${preview.length < c.body.length ? '...' : ''}`;
-    });
-  }
-
-  /**
-   * Create empty result for errors
+   * Create an empty review result
    */
   private createEmptyResult(message: string): ReviewResult {
     return {
       comments: [],
-      summary: `Review failed: ${message}`,
+      summary: `Review failed or was empty: ${message}`,
       stats: { errors: 0, warnings: 0, suggestions: 0 },
-      recommendation: 'APPROVE',
-      topIssues: [],
     };
   }
 }

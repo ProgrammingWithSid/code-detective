@@ -2,11 +2,11 @@
  * Tests for Codegraph Analyzer
  */
 
-import { createCodegraphAnalyzer, CodegraphAnalyzer } from '../src/analyzers/codegraph-analyzer';
-import { ChangedFile } from '../src/types';
 import * as fs from 'fs';
-import * as path from 'path';
 import * as os from 'os';
+import * as path from 'path';
+import { CodegraphAnalyzer, createCodegraphAnalyzer } from '../src/analyzers/codegraph-analyzer';
+import { ChangedFile } from '../src/types';
 
 describe('CodegraphAnalyzer', () => {
   let analyzer: CodegraphAnalyzer;
@@ -28,7 +28,7 @@ describe('CodegraphAnalyzer', () => {
   });
 
   describe('buildGraph', () => {
-    it('should build graph for TypeScript files', () => {
+    it('should build graph for TypeScript files', async () => {
       // Create test files
       const file1 = path.join(testDir, 'file1.ts');
       const file2 = path.join(testDir, 'file2.ts');
@@ -44,7 +44,7 @@ export const CONST = 1;`
 export function func2() { return func1(); }`
       );
 
-      analyzer.buildGraph([file1, file2]);
+      await analyzer.buildGraph([file1, file2]);
 
       const deps1 = analyzer.getDependencies(file1);
       const deps2 = analyzer.getDependencies(file2);
@@ -56,11 +56,11 @@ export function func2() { return func1(); }`
       expect(deps2!.fileDeps).toContain(file1);
     });
 
-    it('should handle files with no dependencies', () => {
+    it('should handle files with no dependencies', async () => {
       const file = path.join(testDir, 'standalone.ts');
       fs.writeFileSync(file, 'const x = 1;');
 
-      analyzer.buildGraph([file]);
+      await analyzer.buildGraph([file]);
 
       const deps = analyzer.getDependencies(file);
       expect(deps).toBeDefined();
@@ -68,7 +68,7 @@ export function func2() { return func1(); }`
       expect(deps!.imports.length).toBe(0);
     });
 
-    it('should handle circular dependencies', () => {
+    it('should handle circular dependencies', async () => {
       const file1 = path.join(testDir, 'a.ts');
       const file2 = path.join(testDir, 'b.ts');
 
@@ -81,7 +81,7 @@ export function func2() { return func1(); }`
         `import { funcA } from './a'; export function funcB() { return funcA(); }`
       );
 
-      analyzer.buildGraph([file1, file2]);
+      await analyzer.buildGraph([file1, file2]);
 
       const depsA = analyzer.getDependencies(file1);
       const depsB = analyzer.getDependencies(file2);
@@ -92,7 +92,7 @@ export function func2() { return func1(); }`
       expect(depsB!.fileDeps).toContain(file1);
     });
 
-    it('should exclude files matching exclude patterns', () => {
+    it('should exclude files matching exclude patterns', async () => {
       const file1 = path.join(testDir, 'src', 'file.ts');
       const file2 = path.join(testDir, 'node_modules', 'dep.ts');
 
@@ -102,7 +102,7 @@ export function func2() { return func1(); }`
       fs.writeFileSync(file1, 'export const x = 1;');
       fs.writeFileSync(file2, 'export const y = 2;');
 
-      analyzer.buildGraph([file1, file2]);
+      await analyzer.buildGraph([file1, file2]);
 
       const deps = analyzer.getDependencies(file1);
       // node_modules should be excluded
@@ -112,7 +112,7 @@ export function func2() { return func1(); }`
   });
 
   describe('analyzeImpact', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       // Setup a simple dependency graph
       const file1 = path.join(testDir, 'base.ts');
       const file2 = path.join(testDir, 'middle.ts');
@@ -128,7 +128,7 @@ export function func2() { return func1(); }`
         `import { middle } from './middle'; export function top() { return middle(); }`
       );
 
-      analyzer.buildGraph([file1, file2, file3]);
+      await analyzer.buildGraph([file1, file2, file3]);
     });
 
     it('should identify affected files', () => {
@@ -193,11 +193,11 @@ export function func2() { return func1(); }`
       expect(impact.affectedFiles.length).toBeGreaterThan(0);
     });
 
-    it('should return low severity for isolated changes', () => {
+    it('should return low severity for isolated changes', async () => {
       const file = path.join(testDir, 'isolated.ts');
       fs.writeFileSync(file, 'const x = 1;');
 
-      analyzer.buildGraph([file]);
+      await analyzer.buildGraph([file]);
       const changedFiles: ChangedFile[] = [
         {
           path: file,
@@ -215,7 +215,7 @@ export function func2() { return func1(); }`
   });
 
   describe('getDependencies', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       const file1 = path.join(testDir, 'lib.ts');
       const file2 = path.join(testDir, 'app.ts');
 
@@ -231,7 +231,7 @@ export type HelperType = string;`
 export function app() { return helper(); }`
       );
 
-      analyzer.buildGraph([file1, file2]);
+      await analyzer.buildGraph([file1, file2]);
     });
 
     it('should return imports and exports', () => {
@@ -253,14 +253,14 @@ export function app() { return helper(); }`
   });
 
   describe('generateVisualization', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       const file1 = path.join(testDir, 'a.ts');
       const file2 = path.join(testDir, 'b.ts');
 
       fs.writeFileSync(file1, 'export function a() {}');
       fs.writeFileSync(file2, `import { a } from './a'; export function b() { a(); }`);
 
-      analyzer.buildGraph([file1, file2]);
+      await analyzer.buildGraph([file1, file2]);
     });
 
     it('should generate Mermaid diagram', () => {
@@ -281,22 +281,22 @@ export function app() { return helper(); }`
   });
 
   describe('Edge Cases', () => {
-    it('should handle empty file list', () => {
-      analyzer.buildGraph([]);
+    it('should handle empty file list', async () => {
+      await analyzer.buildGraph([]);
 
       const impact = analyzer.analyzeImpact([]);
       expect(impact.changedFiles.length).toBe(0);
       expect(impact.affectedFiles.length).toBe(0);
     });
 
-    it('should handle malformed imports gracefully', () => {
+    it('should handle malformed imports gracefully', async () => {
       const file = path.join(testDir, 'malformed.ts');
       fs.writeFileSync(file, 'import { broken from "./nonexistent";');
 
-      expect(() => analyzer.buildGraph([file])).not.toThrow();
+      await expect(analyzer.buildGraph([file])).resolves.not.toThrow();
     });
 
-    it('should handle very large files', () => {
+    it('should handle very large files', async () => {
       const file = path.join(testDir, 'large.ts');
       const largeContent = Array(1000)
         .fill(0)
@@ -305,7 +305,7 @@ export function app() { return helper(); }`
 
       fs.writeFileSync(file, largeContent);
 
-      analyzer.buildGraph([file]);
+      await analyzer.buildGraph([file]);
 
       const deps = analyzer.getDependencies(file);
       expect(deps).toBeDefined();

@@ -9,9 +9,9 @@
  * - Visualizes code relationships
  */
 
-import { readFileSync, existsSync } from 'fs';
-import { join, dirname, normalize, resolve } from 'path';
-import { ChangedFile } from '../types';
+import { existsSync, readFileSync } from 'fs';
+import { dirname, join, normalize, relative, resolve } from 'path';
+import { ChangedFile, CodeIndexer } from '../types';
 
 // ============================================================================
 // Types
@@ -84,8 +84,9 @@ export interface CodegraphOptions {
 export class CodegraphAnalyzer {
   private options: CodegraphOptions;
   private graph: DependencyGraph;
+  private indexerClient?: CodeIndexer;
 
-  constructor(options: CodegraphOptions) {
+  constructor(options: CodegraphOptions, indexerClient?: CodeIndexer) {
     this.options = {
       maxDepth: 5,
       analyzeInternal: true,
@@ -99,39 +100,53 @@ export class CodegraphAnalyzer {
       fileCount: 0,
       dependencyCount: 0,
     };
+    this.indexerClient = indexerClient;
   }
 
   /**
    * Build dependency graph from codebase
    */
-  buildGraph(files: string[]): DependencyGraph {
+  async buildGraph(files: string[]): Promise<DependencyGraph> {
     const nodes = new Map<string, DependencyNode>();
     const dependents = new Map<string, Set<string>>();
 
-    // Analyze each file
-    for (const file of files) {
-      if (this.shouldExclude(file)) continue;
-
-      try {
-        // Resolve to absolute path first (for file existence check)
-        const absoluteFile = resolve(this.options.rootDir, file);
-        // Then normalize for consistent storage/lookup
-        const normalizedFile = normalize(absoluteFile);
-
-        // Use absolute path for file operations (analyzeFile checks existence)
-        // But pass normalized path to analysis methods so resolveImportPath uses consistent paths
-        const node = this.analyzeFileWithNormalizedPath(absoluteFile, normalizedFile);
-        if (node) {
-          // Update node file path to normalized version
-          node.file = normalizedFile;
-          // Normalize all fileDeps to ensure consistent paths
-          node.fileDeps = node.fileDeps.map((dep) => normalize(dep));
-          nodes.set(normalizedFile, node);
-        }
-      } catch (error) {
-        console.warn(`Failed to analyze ${file}:`, error);
-      }
+    // Check if indexer is available
+    const useIndexer = this.indexerClient ? await this.indexerClient.isAvailable() : false;
+    if (useIndexer) {
+      console.log('⚡ Using Rust indexer for faster dependency analysis');
     }
+
+    // Analyze each file
+    await Promise.all(
+      files.map(async (file) => {
+        if (this.shouldExclude(file)) return;
+
+        try {
+          // Resolve to absolute path first (for file existence check)
+          const absoluteFile = resolve(this.options.rootDir, file);
+          // Then normalize for consistent storage/lookup
+          const normalizedFile = normalize(absoluteFile);
+
+          // Use absolute path for file operations
+          let node: DependencyNode | null;
+          if (useIndexer) {
+            node = await this.analyzeWithIndexer(absoluteFile, normalizedFile);
+          } else {
+            node = this.analyzeFileWithNormalizedPath(absoluteFile, normalizedFile);
+          }
+
+          if (node) {
+            // Update node file path to normalized version
+            node.file = normalizedFile;
+            // Normalize all fileDeps to ensure consistent paths
+            node.fileDeps = node.fileDeps.map((dep) => normalize(dep));
+            nodes.set(normalizedFile, node);
+          }
+        } catch (error) {
+          console.warn(`Failed to analyze ${file}:`, error);
+        }
+      })
+    );
 
     // Build reverse dependency map
     for (const [file, node] of nodes) {
@@ -288,6 +303,44 @@ export class CodegraphAnalyzer {
     // If file is already absolute, resolve will return it as-is
     const absoluteFile = resolve(this.options.rootDir, file);
     return normalize(absoluteFile);
+  }
+
+  /**
+   * Analyze file using Rust indexer
+   */
+  private async analyzeWithIndexer(
+    absoluteFile: string,
+    normalizedFile: string
+  ): Promise<DependencyNode | null> {
+    const relPath = relative(this.options.rootDir, absoluteFile);
+
+    if (!this.indexerClient) {
+      return null;
+    }
+
+    try {
+      const symbols = await this.indexerClient.extractSymbols(this.options.rootDir, relPath);
+      const deps = await this.indexerClient.extractDeps(this.options.rootDir, relPath);
+
+      const node: DependencyNode = {
+        file: normalizedFile,
+        exports: symbols.filter((s) => s.is_exported).map((s) => s.name),
+        imports: deps.map((d) => ({
+          symbol: d.target, // Rust indexer currently maps targets as symbols/modules
+          source: d.target,
+          type: d.type === 'import' ? 'named' : 'default',
+        })),
+        internalDeps: [], // Internal deps are harder to map from current Rust output
+        fileDeps: Array.from(
+          new Set(deps.map((d) => this.resolveImportPath(normalizedFile, d.target)))
+        ),
+      };
+
+      return node;
+    } catch (error) {
+      // Fallback to local analysis if indexer fails for this file
+      return this.analyzeFileWithNormalizedPath(absoluteFile, normalizedFile);
+    }
   }
 
   /**
@@ -683,10 +736,9 @@ export class CodegraphAnalyzer {
   }
 }
 
-// ============================================================================
-// Factory Function
-// ============================================================================
-
-export function createCodegraphAnalyzer(options: CodegraphOptions): CodegraphAnalyzer {
-  return new CodegraphAnalyzer(options);
+export function createCodegraphAnalyzer(
+  options: CodegraphOptions,
+  indexer?: CodeIndexer
+): CodegraphAnalyzer {
+  return new CodegraphAnalyzer(options, indexer);
 }

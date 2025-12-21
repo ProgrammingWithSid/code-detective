@@ -218,7 +218,7 @@ export interface WebhookHandler {
   /** Verify webhook signature */
   verifySignature(payload: string, signature: string, secret: string): boolean;
   /** Parse and normalize webhook payload */
-  parsePayload(body: unknown, headers: Record<string, string>): NormalizedWebhookEvent | null;
+  parsePayload(body: object | null, headers: Record<string, string>): NormalizedWebhookEvent | null;
   /** Process the webhook event */
   handleEvent(event: NormalizedWebhookEvent): Promise<void>;
 }

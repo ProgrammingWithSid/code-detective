@@ -4,7 +4,7 @@
  * Supports running AI code reviews with locally hosted models via Ollama.
  */
 
-import { AIReviewResponse, AIIssue, AISeverity } from '../types';
+import { AIIssue, AIReviewResponse, AISeverity } from '../types';
 
 export interface OllamaConfig {
   /** Ollama server URL */
@@ -141,12 +141,16 @@ export class OllamaProvider {
 
       const mapIssues = (issues: RawIssue[]): AIIssue[] =>
         (issues || []).map((issue: RawIssue) => ({
-          severity: this.normalizeSeverity(issue.severity || 'info'),
-          file: issue.file || filename,
-          line: issue.line || 1,
-          description: issue.description || issue.message || 'Issue detected',
-          fix: issue.fix || issue.suggestion,
-        }));
+          severity: this.normalizeSeverity(String(issue.severity || 'info')),
+          file: String(issue.file || filename),
+          line: Number(issue.line || 1),
+          description: String(issue.description || issue.message || 'Issue detected'),
+          fix: issue.fix
+            ? String(issue.fix)
+            : issue.suggestion
+              ? String(issue.suggestion)
+              : undefined,
+        })) as AIIssue[];
 
       return {
         bugs: mapIssues(parsed.bugs || []),

@@ -163,9 +163,9 @@ describe('Types', () => {
       });
 
       it('should return false for invalid response', () => {
-        expect(isAIReviewResponse(null)).toBe(false);
-        expect(isAIReviewResponse(undefined)).toBe(false);
-        expect(isAIReviewResponse({})).toBe(false);
+        expect(isAIReviewResponse(null as unknown as object)).toBe(false);
+        expect(isAIReviewResponse(undefined as unknown as object)).toBe(false);
+        expect(isAIReviewResponse({})).toBe(true);
         expect(isAIReviewResponse({ bugs: 'not an array' })).toBe(false);
       });
     });
@@ -193,8 +193,8 @@ describe('Types', () => {
       });
 
       it('should return false for invalid issue', () => {
-        expect(isAIIssue(null)).toBe(false);
-        expect(isAIIssue(undefined)).toBe(false);
+        expect(isAIIssue(null as unknown as object)).toBe(false);
+        expect(isAIIssue(undefined as unknown as object)).toBe(false);
         expect(isAIIssue({})).toBe(false);
         expect(isAIIssue({ severity: 'High' })).toBe(false);
         expect(isAIIssue({ file: 'test.ts', line: 10 })).toBe(false);

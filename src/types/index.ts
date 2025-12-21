@@ -8,7 +8,7 @@ import { z } from 'zod';
 // AI Provider Types
 // ============================================================================
 
-export const AIProviderSchema = z.enum(['openai', 'claude']);
+export const AIProviderSchema = z.enum(['openai', 'claude', 'ollama']);
 export type AIProvider = z.infer<typeof AIProviderSchema>;
 
 // ============================================================================
@@ -26,6 +26,12 @@ export const ClaudeConfigSchema = z.object({
   model: z.string().default('claude-3-5-sonnet-20241022'),
 });
 export type ClaudeConfig = z.infer<typeof ClaudeConfigSchema>;
+
+export const OllamaConfigSchema = z.object({
+  baseUrl: z.string().default('http://localhost:11434'),
+  model: z.string().default('codellama'),
+});
+export type OllamaConfig = z.infer<typeof OllamaConfigSchema>;
 
 export const RepositoryConfigSchema = z.object({
   owner: z.string().min(1, 'Repository owner is required'),
@@ -220,6 +226,7 @@ export const ConfigSchema = z.object({
   aiProvider: AIProviderSchema,
   openai: OpenAIConfigSchema.optional(),
   claude: ClaudeConfigSchema.optional(),
+  ollama: OllamaConfigSchema.optional(),
   globalRules: z.array(z.string()).default([]),
   repository: RepositoryConfigSchema,
   pr: PRConfigSchema,
@@ -253,6 +260,10 @@ export interface CodeChunk {
   extension?: string;
   /** Detected programming language (e.g., 'typescript', 'python', 'vue') */
   language?: string;
+  /** Importance score based on impact analysis (0-100) */
+  priorityScore?: number;
+  /** Impact level (high, medium, low) */
+  impactLevel?: 'high' | 'medium' | 'low';
 }
 
 export interface ChunkyyyChunk {
@@ -263,11 +274,59 @@ export interface ChunkyyyChunk {
   startLine?: number;
   endLine?: number;
   hash?: string;
-  dependencies?: unknown[];
+  dependencies?: string[];
   range?: {
     start?: { line?: number };
     end?: { line?: number };
   };
+}
+
+// ============================================================================
+// Indexer Types
+// ============================================================================
+
+export const SymbolExtractionSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  signature: z.string(),
+  start_line: z.number(),
+  end_line: z.number(),
+  is_exported: z.boolean(),
+});
+
+export const DependencyExtractionSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+  type: z.enum(['import', 'require', 'export']),
+});
+
+export interface SymbolExtraction {
+  name: string;
+  type: string;
+  signature: string;
+  start_line: number;
+  end_line: number;
+  is_exported: boolean;
+}
+
+export interface DependencyExtraction {
+  source: string;
+  target: string;
+  type: 'import' | 'require' | 'export';
+}
+
+/**
+ * Interface for code indexing services (e.g., Rust-based indexer)
+ */
+export interface CodeIndexer {
+  /** Check if the indexer service is available */
+  isAvailable(): Promise<boolean>;
+  /** Extract symbols from a file */
+  extractSymbols(repoPath: string, filePath: string): Promise<SymbolExtraction[]>;
+  /** Extract dependencies from a file */
+  extractDeps(repoPath: string, filePath: string): Promise<DependencyExtraction[]>;
+  /** Get hash for a file chunk */
+  getHash(repoPath: string, filePath: string): Promise<string | null>;
 }
 
 // ============================================================================
@@ -381,31 +440,47 @@ export interface ReviewResult {
 // AI Response Types
 // ============================================================================
 
-export type AISeverity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Nitpick';
+export const AIIssueSchema = z.object({
+  severity: z.enum(['Critical', 'High', 'Medium', 'Low', 'Nitpick']),
+  file: z.string(),
+  line: z.number(),
+  description: z.string(),
+  fix: z.string().optional(),
+  impact_analysis: z.string().optional(),
+});
 
-export interface AIIssue {
-  severity: AISeverity;
-  file: string;
-  line: number;
-  description: string;
-  fix?: string;
-}
+export const AISummarySchema = z.object({
+  recommendation: z.enum(['BLOCK', 'REQUEST_CHANGES', 'APPROVE_WITH_NITS', 'APPROVE']),
+  top_issues: z.array(z.string()),
+  complexity_score: z.number().optional(),
+  critical_files: z.array(z.string()).optional(),
+});
 
-export type AICategory = 'bugs' | 'security' | 'performance' | 'code_quality' | 'architecture';
+export const AIReviewResponseSchema = z
+  .object({
+    reasoning: z.string().optional(),
+    bugs: z.array(AIIssueSchema).default([]),
+    security: z.array(AIIssueSchema).default([]),
+    performance: z.array(AIIssueSchema).default([]),
+    code_quality: z.array(AIIssueSchema).default([]),
+    architecture: z.array(AIIssueSchema).default([]),
+    summary: AISummarySchema.optional(),
+  })
+  .partial();
 
-export interface AISummary {
-  recommendation: 'BLOCK' | 'REQUEST_CHANGES' | 'APPROVE_WITH_NITS' | 'APPROVE';
-  top_issues: string[];
-}
+export const AICategorySchema = z.enum([
+  'bugs',
+  'security',
+  'performance',
+  'code_quality',
+  'architecture',
+]);
+export type AICategory = z.infer<typeof AICategorySchema>;
 
-export interface AIReviewResponse {
-  bugs: AIIssue[];
-  security: AIIssue[];
-  performance: AIIssue[];
-  code_quality: AIIssue[];
-  architecture: AIIssue[];
-  summary?: AISummary;
-}
+export interface AIReviewResponse extends z.infer<typeof AIReviewResponseSchema> {}
+export type AISeverity = z.infer<typeof AIIssueSchema>['severity'];
+export interface AIIssue extends z.infer<typeof AIIssueSchema> {}
+export interface AISummary extends z.infer<typeof AISummarySchema> {}
 
 // ============================================================================
 // Git Types
@@ -498,27 +573,14 @@ export interface FileLanguageMap {
 }
 
 // Type guards
-export function isAIReviewResponse(obj: unknown): obj is AIReviewResponse {
-  if (typeof obj !== 'object' || obj === null) return false;
-  const response = obj as Record<string, unknown>;
-  return (
-    Array.isArray(response.bugs) ||
-    Array.isArray(response.security) ||
-    Array.isArray(response.performance) ||
-    Array.isArray(response.code_quality) ||
-    Array.isArray(response.architecture)
-  );
+export function isAIReviewResponse(obj: object | null): obj is AIReviewResponse {
+  if (!obj) return false;
+  return AIReviewResponseSchema.safeParse(obj).success;
 }
 
-export function isAIIssue(obj: unknown): obj is AIIssue {
-  if (typeof obj !== 'object' || obj === null) return false;
-  const issue = obj as Record<string, unknown>;
-  return (
-    typeof issue.severity === 'string' &&
-    typeof issue.file === 'string' &&
-    typeof issue.line === 'number' &&
-    typeof issue.description === 'string'
-  );
+export function isAIIssue(obj: object | null): obj is AIIssue {
+  if (!obj) return false;
+  return AIIssueSchema.safeParse(obj).success;
 }
 
 // Default config
