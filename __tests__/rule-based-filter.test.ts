@@ -1,5 +1,5 @@
-import { RuleBasedFilter } from '../src/utils/rule-based-filter';
 import { CodeChunk } from '../src/types';
+import { RuleBasedFilter } from '../src/utils/rule-based-filter';
 
 describe('RuleBasedFilter', () => {
   let filter: RuleBasedFilter;
@@ -227,6 +227,72 @@ describe('RuleBasedFilter', () => {
 
       const issues = filter.analyzeChunks(chunks);
       expect(issues.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('should NOT trigger JS/TS specific rules for Go files', () => {
+      const chunks: CodeChunk[] = [
+        {
+          id: '1',
+          name: 'test',
+          type: 'function',
+          file: 'test.go',
+          startLine: 1,
+          endLine: 4,
+          content: 'var x = 1\nif x == 2 {}\nfmt.Println(x)\n',
+        },
+      ];
+
+      const issues = filter.analyzeChunks(chunks);
+
+      // Should NOT find eqeqeq, no-var, or no-console
+      const jsIssues = issues.filter((i) => ['eqeqeq', 'no-var', 'no-console'].includes(i.rule));
+      expect(jsIssues.length).toBe(0);
+
+      // Should still find TODO if present
+      const withTodo: CodeChunk[] = [
+        {
+          ...chunks[0],
+          content: 'var x = 1 // TODO: fix\n',
+        },
+      ];
+      const todoIssues = filter.analyzeChunks(withTodo);
+      expect(todoIssues.find((i) => i.rule === 'no-todo')).toBeDefined();
+    });
+
+    it('should NOT trigger JS/TS specific rules for Python files', () => {
+      const chunks: CodeChunk[] = [
+        {
+          id: '1',
+          name: 'test',
+          type: 'function',
+          file: 'test.py',
+          startLine: 1,
+          endLine: 4,
+          content: 'var x = 1\nif x == 2:\n    print(x)\n',
+        },
+      ];
+
+      const issues = filter.analyzeChunks(chunks);
+      const jsIssues = issues.filter((i) => ['eqeqeq', 'no-var', 'no-console'].includes(i.rule));
+      expect(jsIssues.length).toBe(0);
+    });
+
+    it('should NOT trigger JS/TS specific rules for Rust files', () => {
+      const chunks: CodeChunk[] = [
+        {
+          id: '1',
+          name: 'test',
+          type: 'function',
+          file: 'test.rs',
+          startLine: 1,
+          endLine: 4,
+          content: 'let var_x = 1;\nif x == 2 {\n    println!("{:?}", x);\n}\n',
+        },
+      ];
+
+      const issues = filter.analyzeChunks(chunks);
+      const jsIssues = issues.filter((i) => ['eqeqeq', 'no-var', 'no-console'].includes(i.rule));
+      expect(jsIssues.length).toBe(0);
     });
   });
 

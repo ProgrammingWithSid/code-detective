@@ -70,7 +70,18 @@ export class ContextAwarePromptBuilder {
   private buildBasePrompt(): string {
     return `# Code Review Request
 
-You are an Expert Senior Software Engineer & Code Reviewer.
+You are an Expert Senior Software Engineer & Code Reviewer. Be concise, specific, and constructive. Check for code structure, readability, error handling, documentation, performance, security, and adherence to coding standards.
+Check for the following:
+- The code is well-designed.
+- The functionality is good for the users of the code.
+- Any UI changes are sensible and look good.
+- Any parallel programming is done safely.
+- The code isn’t more complex than it needs to be.
+- The developer isn’t implementing things they might need in the future but don’t know they need now.
+- Code has appropriate unit tests.
+- Tests are well-designed.
+- The developer used clear names for everything.
+- Comments are clear and useful, and mostly explain why instead of what.
 
 Analyze the provided code and identify issues in the following categories:
 - Bugs: Logic errors, runtime issues, incorrect async/state handling, edge cases
@@ -78,6 +89,10 @@ Analyze the provided code and identify issues in the following categories:
 - Performance: N+1 queries, inefficient loops, heavy operations repeated, blocking I/O
 - Code Quality: Anti-patterns, code smells, missing null checks, poor naming, duplicated logic
 - Architecture: Tight coupling, missing validation, weak contracts, bad error-handling
+
+**Important:**
+ - First check the language of the code, framework used, file types, dependencies, codebase patterns, relationships, global rules.
+ - Then check the code for the above mentioned categories.
 
 `;
   }
@@ -190,6 +205,7 @@ Analyze the provided code and identify issues in the following categories:
 - Look for common pitfalls: mutable default arguments, late binding in closures.
 - Ensure proper resource management (with statements).
 - Verify docstring quality and completeness.
+- **IMPORTANT**: Avoid suggesting 'const' for variables unless they are truly literal constants. Prefer 'UPPER_CASE' for module-level constants.
 `,
       go: `
 ## Go Best Practices
@@ -197,6 +213,7 @@ Analyze the provided code and identify issues in the following categories:
 - Verify idiomatic naming (MixedCaps, no underscores).
 - Validate goroutine and channel usage (leaks, deadlocks).
 - Check for proper use of interfaces (implicit implementation).
+- **CRITICAL**: Go only supports 'const' for basic types (string, boolean, numeric). Do NOT suggest converting structs (e.g., sql.NullFloat64), slices, or maps to 'const'. Use 'var' for these.
 - Ensure defer is used for resource cleanup.
 `,
       rust: `
@@ -206,6 +223,15 @@ Analyze the provided code and identify issues in the following categories:
 - Validate unsafe blocks usage.
 - Check for proper use of traits and generics.
 - Look for potential panics (unwrap, expect).
+- **IMPORTANT**: Mention if a 'clone()' can be replaced by a reference or 'borrow()'.
+`,
+      java: `
+## Java Best Practices
+- Verify proper use of access modifiers.
+- Check for resource leaks (use try-with-resources).
+- Validate proper use of Generics.
+- Look for potential NullPointerExceptions.
+- **IMPORTANT**: 'final' in Java is similar to 'const' but applies to the reference; do not suggest 'final' if the object state needs to change unless intended.
 `,
     };
 
@@ -387,6 +413,36 @@ Analyze the provided code and identify issues in the following categories:
       if (chunk.file.endsWith('.svelte')) {
         frameworks.add('svelte');
       }
+      if (chunk.file.endsWith('.py')) {
+        frameworks.add('python');
+      }
+      if (chunk.file.endsWith('.go')) {
+        frameworks.add('go');
+      }
+      if (chunk.file.endsWith('.rs')) {
+        frameworks.add('rust');
+      }
+      if (chunk.file.endsWith('.java')) {
+        frameworks.add('java');
+      }
+      if (chunk.file.endsWith('.kt')) {
+        frameworks.add('kotlin');
+      }
+      if (chunk.file.endsWith('.rb')) {
+        frameworks.add('ruby');
+      }
+      if (chunk.file.endsWith('.css')) {
+        frameworks.add('css');
+      }
+      if (chunk.file.endsWith('.scss')) {
+        frameworks.add('scss');
+      }
+      if (chunk.file.endsWith('.html')) {
+        frameworks.add('html');
+      }
+      if (chunk.file.endsWith('.json')) {
+        frameworks.add('json');
+      }
 
       // Extract dependencies
       if (chunk.dependencies) {
@@ -400,11 +456,7 @@ Analyze the provided code and identify issues in the following categories:
 
     return {
       framework:
-        frameworks.size === 1
-          ? (Array.from(frameworks)[0] as ReviewContext['framework'])
-          : frameworks.size > 1
-            ? 'react' // Default to react if multiple
-            : 'none',
+        frameworks.size === 1 ? (Array.from(frameworks)[0] as ReviewContext['framework']) : 'none',
       fileTypes: Array.from(fileTypes),
       dependencies: dependencies.slice(0, 20), // Limit to 20
     };

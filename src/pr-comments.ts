@@ -373,6 +373,7 @@ export class GitHubCommentService implements PRCommentService {
       }
     }
 
+    console.warn(`[Mapping] Comment on ${comment.file}:${comment.line} NOT found in diff patch`);
     return false;
   }
 
@@ -594,6 +595,9 @@ export class GitHubCommentService implements PRCommentService {
       }
     }
 
+    console.warn(
+      `[Mapping] Line ${lineNumber} in ${prFile.filename} could not be found within its diff patch`
+    );
     return null; // Line not found in diff
   }
 

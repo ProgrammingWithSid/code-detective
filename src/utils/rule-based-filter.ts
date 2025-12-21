@@ -62,9 +62,15 @@ export class RuleBasedFilter {
   ): RuleBasedIssue[] {
     const issues: RuleBasedIssue[] = [];
     const trimmedLine = line.trim();
+    const ext = filePath.split('.').pop()?.toLowerCase() || '';
 
-    // Rule 1: Console.log statements
-    if (this.matchesPattern(trimmedLine, /console\.(log|debug|info|warn|error)/)) {
+    // Language categories
+    const isJS = ['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs'].includes(ext);
+    const isWeb = ['html', 'vue', 'svelte', 'astro'].includes(ext) || isJS;
+    const isJavaLike = ['java', 'cs', 'kt'].includes(ext) || isJS;
+
+    // Rule 1: Console.log statements (JS/TS specific)
+    if (isJS && this.matchesPattern(trimmedLine, /console\.(log|debug|info|warn|error)/)) {
       issues.push({
         file: filePath,
         line: lineNumber,
@@ -76,7 +82,7 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 2: TODO/FIXME comments
+    // Rule 2: TODO/FIXME comments (Language agnostic)
     if (this.matchesPattern(trimmedLine, /\/\/\s*(TODO|FIXME|HACK|XXX)/i)) {
       issues.push({
         file: filePath,
@@ -88,8 +94,8 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 3: Debugger statements
-    if (this.matchesPattern(trimmedLine, /\bdebugger\b/)) {
+    // Rule 3: Debugger statements (JS/TS specific)
+    if (isJS && this.matchesPattern(trimmedLine, /\bdebugger\b/)) {
       issues.push({
         file: filePath,
         line: lineNumber,
@@ -101,8 +107,8 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 4: Empty catch blocks
-    if (this.matchesPattern(trimmedLine, /catch\s*\([^)]*\)\s*\{\s*\}/)) {
+    // Rule 4: Empty catch blocks (JS/Java/C# like)
+    if (isJavaLike && this.matchesPattern(trimmedLine, /catch\s*\([^)]*\)\s*\{\s*\}/)) {
       issues.push({
         file: filePath,
         line: lineNumber,
@@ -114,8 +120,8 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 5: == instead of ===
-    if (this.matchesPattern(trimmedLine, /[^=!]==[^=]/)) {
+    // Rule 5: == instead of === (JS/TS specific)
+    if (isJS && this.matchesPattern(trimmedLine, /[^=!]==[^=]/)) {
       issues.push({
         file: filePath,
         line: lineNumber,
@@ -127,8 +133,8 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 6: != instead of !==
-    if (this.matchesPattern(trimmedLine, /[^=!]!=[^=]/)) {
+    // Rule 6: != instead of !== (JS/TS specific)
+    if (isJS && this.matchesPattern(trimmedLine, /[^=!]!=[^=]/)) {
       issues.push({
         file: filePath,
         line: lineNumber,
@@ -140,8 +146,8 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 7: var instead of let/const
-    if (this.matchesPattern(trimmedLine, /\bvar\s+\w+/)) {
+    // Rule 7: var instead of let/const (JS/TS specific)
+    if (isJS && this.matchesPattern(trimmedLine, /\bvar\s+\w+/)) {
       issues.push({
         file: filePath,
         line: lineNumber,
@@ -153,7 +159,7 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 8: Hardcoded secrets (basic pattern)
+    // Rule 8: Hardcoded secrets (basic pattern) (Language agnostic)
     if (
       this.matchesPattern(
         trimmedLine,
@@ -171,7 +177,7 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 9: eval() usage
+    // Rule 9: eval() usage (Language agnostic, but mostly dangerous in JS/Python/Ruby)
     if (this.matchesPattern(trimmedLine, /\beval\s*\(/)) {
       issues.push({
         file: filePath,
@@ -184,8 +190,8 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 10: innerHTML without sanitization
-    if (this.matchesPattern(trimmedLine, /\.innerHTML\s*=/)) {
+    // Rule 10: innerHTML without sanitization (Web specific)
+    if (isWeb && this.matchesPattern(trimmedLine, /\.innerHTML\s*=/)) {
       issues.push({
         file: filePath,
         line: lineNumber,
@@ -198,20 +204,11 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 11: Missing null check before property access
-    if (
-      this.matchesPattern(trimmedLine, /\w+\.\w+/) &&
-      !this.matchesPattern(trimmedLine, /(\?\?|\.\?|if\s*\(|&&)/)
-    ) {
-      // This is a heuristic - check if previous lines have null checks
-      // For now, just flag potential issues
-    }
-
-    // Rule 12: setTimeout/setInterval without cleanup
+    // Rule 12: setTimeout/setInterval without cleanup (Frontend framework specific)
     if (
       this.matchesPattern(trimmedLine, /(setTimeout|setInterval)\s*\(/) &&
       chunk.type === 'function' &&
-      chunk.file.match(/\.(tsx|jsx|vue)$/)
+      filePath.match(/\.(tsx|jsx|vue|svelte|astro)$/)
     ) {
       issues.push({
         file: filePath,
@@ -223,14 +220,11 @@ export class RuleBasedFilter {
       });
     }
 
-    // Rule 13: ESLint disable comments without reason
-    // Match: // eslint-disable, // eslint-disable-next-line, // eslint-disable-line
-    // Also match: /* eslint-disable */, /* eslint-disable-next-line */, etc.
+    // Rule 13: ESLint disable comments without reason (JS/TS specific)
     const eslintDisablePattern =
       /(?:^|\s)(?:\/\/|\/\*)\s*eslint-disable(?:-next-line|-line)?(?:\s+[\w-,\s]+)?(?:\s*\*\/)?/i;
-    if (this.matchesPattern(trimmedLine, eslintDisablePattern)) {
+    if (isJS && this.matchesPattern(trimmedLine, eslintDisablePattern)) {
       // Check if there's a reason comment (after -- or in a separate comment)
-      // Reason can be: -- reason text, or /* reason */, or // reason on same/next line
       const hasReasonInLine =
         (trimmedLine.includes('--') && trimmedLine.match(/--\s+.+/)) ||
         (trimmedLine.match(/\/\*\s*.+\s*\*\//) &&
@@ -242,10 +236,9 @@ export class RuleBasedFilter {
         nextLine.length > 0 &&
         (nextLine.startsWith('//') || nextLine.startsWith('/*')) &&
         !nextLine.match(/eslint-disable/i) &&
-        nextLine.length > 3; // More than just "//" or "/* */"
+        nextLine.length > 3;
 
       if (!hasReasonInLine && !hasReasonInNextLine) {
-        // Extract the rule name(s) if present (can be multiple rules separated by commas)
         const ruleMatch = trimmedLine.match(
           /eslint-disable(?:-next-line|-line)?(?:\s+([\w-,\s]+))?/i
         );

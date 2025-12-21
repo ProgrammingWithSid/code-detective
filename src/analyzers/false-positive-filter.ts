@@ -8,9 +8,9 @@
  * - Tool-specific filtering rules
  */
 
+import { ReviewComment } from '../types';
 import { LinterIssue } from './linter-integration';
 import { SASTIssue } from './sast-integration';
-import { ReviewComment } from '../types';
 
 // ============================================================================
 // Types
@@ -59,7 +59,19 @@ const DEFAULT_FALSE_POSITIVE_PATTERNS: FalsePositivePattern[] = [
   {
     pattern: /prefer.*const/i,
     reason: 'Style preference, not a bug',
-    confidenceThreshold: 0.5,
+    confidenceThreshold: 0.6,
+  },
+  {
+    pattern: /convert.*to.*const/i,
+    filePattern: /\.go$/,
+    reason: 'Illegal const in Go for complex types',
+    confidenceThreshold: 0.9,
+  },
+  {
+    pattern: /convert.*to.*const/i,
+    filePattern: /\.java$/,
+    reason: 'Final/const confusion in Java',
+    confidenceThreshold: 0.7,
   },
   {
     pattern: /line.*too.*long/i,
@@ -113,6 +125,13 @@ const DEFAULT_FALSE_POSITIVE_PATTERNS: FalsePositivePattern[] = [
     tool: 'bandit',
     reason: 'May be acceptable for non-cryptographic use',
     confidenceThreshold: 0.7,
+  },
+  // Rust specific false positives
+  {
+    pattern: /avoid.*unwrap/i,
+    filePattern: /(test|spec)/i,
+    reason: 'Unwrap is acceptable in tests',
+    confidenceThreshold: 0.8,
   },
 ];
 
