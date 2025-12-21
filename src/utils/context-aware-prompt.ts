@@ -215,6 +215,7 @@ Analyze the provided code and identify issues in the following categories:
 - Check for proper use of interfaces (implicit implementation).
 - **CRITICAL**: Go only supports 'const' for basic types (string, boolean, numeric). Do NOT suggest converting structs (e.g., sql.NullFloat64), slices, or maps to 'const'. Use 'var' for these.
 - Ensure defer is used for resource cleanup.
+- **SQL Injection Accuracy**: When reviewing SQL queries, check for placeholders like '$1', '$2', or '?' and verify if they are passed correctly to database methods. Do NOT flag Postgres JSONB operators (e.g., '->>', '#>>', '::jsonb') or type casts (e.g., '::float') as injection points if the query is template-based and parameterized.
 `,
       rust: `
 ## Rust Best Practices

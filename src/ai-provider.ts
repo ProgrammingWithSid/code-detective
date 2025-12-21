@@ -93,7 +93,6 @@ If a category has no issues, return an empty array.
 - Do NOT hallucinate file names or line numbers.
 - Do NOT output anything except valid JSON.
 - Every issue MUST include: severity, file, line, description, fix.
-- **Language Accuracy**: Use keywords and syntax appropriate for the language being reviewed. Do NOT suggest 'let' or 'const' for Go, or '!==' for languages that don't support it.
 - Focus on accuracy and actionable feedback.`;
 
 // ============================================================================
